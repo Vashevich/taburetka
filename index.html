@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#f6f1e7">
+<title>Табуретка — планировщик комнаты в 3D, VR и AR</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<canvas id="view"></canvas>
+
+<header id="top">
+  <div class="brand" title="Табуретка">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 6h16v3H4zM6 9l-1.5 11M18 9l1.5 11M7 15h10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span>Табуретка</span>
+  </div>
+  <div class="grp">
+    <button id="btnUndo" class="ib" title="Отменить (Ctrl+Z)" aria-label="Отменить">↶</button>
+    <button id="btnRedo" class="ib" title="Вернуть (Ctrl+Y)" aria-label="Вернуть">↷</button>
+  </div>
+  <div class="seg" role="group" aria-label="Вид">
+    <button id="btn3d" class="on">3D</button>
+    <button id="btnPlan">План</button>
+  </div>
+  <span class="flex"></span>
+  <button id="btnVR" class="xr" hidden>VR</button>
+  <button id="btnAR" class="xr" hidden>AR</button>
+  <button id="btnQL" class="xr" hidden title="AR Quick Look для iPhone / iPad">AR</button>
+  <button id="btnMenu" class="ib" aria-label="Меню">☰</button>
+</header>
+
+<div id="menu" hidden>
+  <button data-act="room">Комната и привязка…</button>
+  <button data-act="save">Сохранить проект в файл</button>
+  <button data-act="open">Открыть проект из файла</button>
+  <button data-act="link">Скопировать ссылку на проект</button>
+  <button data-act="glb">Экспорт сцены в GLB</button>
+  <button data-act="cleardims">Стереть размеры рулетки</button>
+  <button data-act="new">Новая пустая комната</button>
+  <button data-act="help">Справка</button>
+</div>
+
+<div id="status"></div>
+
+<aside id="props" hidden>
+  <div class="row head">
+    <input id="pName" type="text" aria-label="Название" spellcheck="false">
+    <button id="pMore" class="ib sm" title="Параметры" aria-label="Параметры">⋯</button>
+    <button id="pClose" class="ib sm" title="Снять выделение" aria-label="Снять выделение">✕</button>
+  </div>
+  <div class="row acts">
+    <button id="pRotL" title="Повернуть на 90° (Q)">⟲ 90°</button>
+    <button id="pRotR" title="Повернуть на 90° (E)">⟳ 90°</button>
+    <button id="pDup" title="Копия (Ctrl+D)">Копия</button>
+    <button id="pDel" class="danger" title="Удалить (Del)">Удалить</button>
+  </div>
+  <div class="more">
+    <div class="row three">
+      <label>Ширина<input id="pW" type="number" inputmode="decimal" min="1" step="1"><i>см</i></label>
+      <label>Глубина<input id="pD" type="number" inputmode="decimal" min="1" step="1"><i>см</i></label>
+      <label>Высота<input id="pH" type="number" inputmode="decimal" min="1" step="1"><i>см</i></label>
+    </div>
+    <div class="row three">
+      <label>От пола<input id="pY" type="number" inputmode="decimal" step="1"><i>см</i></label>
+      <label>Поворот<input id="pRot" type="number" inputmode="decimal" step="5"><i>°</i></label>
+      <label id="pColorWrap">Цвет<input id="pColor" type="color"></label>
+    </div>
+    <div class="row checks">
+      <label><input id="pKeep" type="checkbox"> пропорции</label>
+      <label><input id="pLock" type="checkbox"> закрепить</label>
+    </div>
+  </div>
+</aside>
+
+<nav id="tools" aria-label="Инструменты">
+  <button data-tool="select" class="on" title="Выбор и перемещение (V)">
+    <svg viewBox="0 0 24 24"><path d="M5 3l14 8-6 2-2 6z"/></svg><span>Выбор</span></button>
+  <button data-tool="rotate" title="Поворот (R)">
+    <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-3-6.2M20 3v5h-5"/></svg><span>Поворот</span></button>
+  <button data-tool="pull" title="Тянуть грани (P)">
+    <svg viewBox="0 0 24 24"><path d="M4 14h10v6H4zM9 14V4M5 8l4-4 4 4"/></svg><span>Тянуть</span></button>
+  <button data-tool="measure" title="Рулетка (T)">
+    <svg viewBox="0 0 24 24"><path d="M3 16L16 3l5 5L8 21zM7 12l2 2M10 9l2 2M13 6l2 2"/></svg><span>Рулетка</span></button>
+  <button id="btnAdd" class="primary" title="Добавить мебель (A)">
+    <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>Мебель</span></button>
+</nav>
+
+<section id="catalog" class="sheet" hidden>
+  <div class="sheet-head">
+    <div class="seg">
+      <button data-tab="blanks" class="on">Болванки</button>
+      <button data-tab="web">Модели из сети</button>
+    </div>
+    <button id="catClose" class="ib sm" aria-label="Закрыть">✕</button>
+  </div>
+  <div id="tabBlanks" class="tab grid"></div>
+  <div id="tabWeb" class="tab" hidden>
+    <div class="urlrow">
+      <input id="mUrl" type="url" placeholder="https://…/model.glb" autocapitalize="off" autocomplete="off" spellcheck="false">
+      <button id="mLoad" class="primary">Загрузить</button>
+    </div>
+    <p class="hint">Ссылка на файл GLB / glTF / OBJ / STL / FBX. Сервер должен разрешать загрузку с других сайтов (CORS) — подходят raw-ссылки GitHub, файлы из своего репозитория, большинство CDN. Ссылки вида github.com/…/blob/… преобразуются автоматически.</p>
+    <button id="mFile">Файл с устройства…</button>
+    <h4>Примеры (Khronos glTF Sample Assets)</h4>
+    <div id="samples" class="grid text"></div>
+    <p class="hint">Где искать бесплатные модели: Poly Pizza, Sketchfab (скачать как GLB), Poly Haven. Скачанный файл можно положить в свой репозиторий и вставить ссылку — тогда он откроется у всех, у кого есть ссылка на проект.</p>
+  </div>
+</section>
+
+<dialog id="roomDlg">
+  <form method="dialog">
+    <h3>Комната</h3>
+    <div class="row three">
+      <label>Ширина<input id="rW" type="number" inputmode="decimal" min="50" step="5"><i>см</i></label>
+      <label>Длина<input id="rD" type="number" inputmode="decimal" min="50" step="5"><i>см</i></label>
+      <label>Высота<input id="rH" type="number" inputmode="decimal" min="50" step="5"><i>см</i></label>
+    </div>
+    <div class="row three">
+      <label>Пол<input id="rFloor" type="color"></label>
+      <label>Стены<input id="rWall" type="color"></label>
+      <label>Привязка
+        <select id="rSnap">
+          <option value="0">нет</option>
+          <option value="0.01">1 см</option>
+          <option value="0.05">5 см</option>
+          <option value="0.1">10 см</option>
+          <option value="0.25">25 см</option>
+        </select></label>
+    </div>
+    <p class="hint">Привязка действует на сетку, стены и края соседней мебели; поворот — с шагом 15°.</p>
+    <div class="row end"><button value="cancel" formnovalidate>Отмена</button><button id="rOk" value="ok" class="primary">Применить</button></div>
+  </form>
+</dialog>
+
+<dialog id="helpDlg">
+  <form method="dialog">
+    <h3>Как пользоваться</h3>
+    <ul class="help">
+      <li><b>Камера.</b> Мышь: левая кнопка — орбита, правая — сдвиг, колесо — масштаб. Телефон: один палец — орбита, два — сдвиг и масштаб. «План» — вид сверху без перспективы.</li>
+      <li><b>Мебель.</b> Кнопка «Мебель» — параметрические болванки или модель по ссылке / из файла.</li>
+      <li><b>Выбор.</b> Нажмите на предмет, затем тащите его по полу. Мышью можно тащить сразу. Предмет липнет к сетке, стенам и соседям.</li>
+      <li><b>Поворот.</b> Тащите вокруг предмета; шаг 15°. Клавиши Q / E — по 90°.</li>
+      <li><b>Тянуть.</b> Аналог Push/Pull: тащите цветные шарики на гранях, чтобы менять ширину, глубину, высоту. Точные размеры — в панели «⋯».</li>
+      <li><b>Рулетка.</b> Два нажатия — размер между точками.</li>
+      <li><b>VR.</b> Курок — взять и двигать предмет, стик во время захвата — поворот. Боковая кнопка — телепорт. Левый стик — ходьба, правый — поворот. Палитра мебели — на левом контроллере.</li>
+      <li><b>AR.</b> Наведите прицел на пол и нажмите — комната встанет в это место. Дальше предметы двигаются пальцем по настоящему полу. «Макет» — уменьшенная копия на столе.</li>
+      <li><b>Проект</b> сохраняется в браузере автоматически; через меню — в файл или ссылкой.</li>
+    </ul>
+    <div class="row end"><button class="primary">Понятно</button></div>
+  </form>
+</dialog>
+
+<div id="xr-overlay" hidden>
+  <div id="xrHint"></div>
+  <div id="xrBar">
+    <button data-xr="add" class="primary">＋ Мебель</button>
+    <button data-xr="rotl">⟲</button>
+    <button data-xr="rotr">⟳</button>
+    <button data-xr="del">Удалить</button>
+    <button data-xr="mini">Макет</button>
+    <button data-xr="anchor">Переставить</button>
+    <button data-xr="exit">Выход</button>
+  </div>
+</div>
+
+<div id="toast" hidden></div>
+<input id="fileModel" type="file" accept=".glb,.gltf,.obj,.stl,.fbx,model/gltf-binary" hidden>
+<input id="fileProject" type="file" accept=".json,application/json" hidden>
+
+<script type="module" src="js/app.js"></script>
+<noscript>Для работы приложения нужен JavaScript.</noscript>
+</body>
+</html>
