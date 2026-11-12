@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=43';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=44';
 
 const STORE = 'taburetka.project.v1';
 
@@ -110,7 +110,7 @@ function normalize(d) {
   return {
     room: {
       w: clamp(num(room.w, 4), 0.5, 50), d: clamp(num(room.d, 5), 0.5, 50), h: clamp(num(room.h, 2.7), 0.5, 20),
-      floor: room.floor || '#d9c7a8', wall: room.wall || '#f4f1ea',
+      floor: room.floor || '#d9c7a8', wall: room.wall || '#f4f1ea', ...(room.blank ? { blank: true } : {}),
       ...(validMesh(room.mesh) ? { mesh: { v: JSON.parse(JSON.stringify(room.mesh.v)), f: JSON.parse(JSON.stringify(room.mesh.f)),
         ...(Array.isArray(room.mesh.c) && room.mesh.c.length === room.mesh.f.length ? { c: room.mesh.c.map((q) => (typeof q === 'string' && /^#[0-9a-f]{6}$/i.test(q) ? q : null)) } : {}) } } : {}),
       ...(room.sun && [room.sun.x, room.sun.y, room.sun.z].every(Number.isFinite) ? { sun: { x: room.sun.x, y: room.sun.y, z: room.sun.z } }
@@ -1640,6 +1640,12 @@ function setTool(t) {
   showErase(null);
   vm.dirty = true;
   if (t !== 'room') $('#facePanel').hidden = true;
+  if (t === 'room' && state.room.blank) {   // на чистом листе «Комната» ставит обычную комнату вокруг начала координат
+    state.room = { w: 4, d: 5, h: 2.7, floor: state.room.floor, wall: state.room.wall, ...(state.room.sun ? { sun: state.room.sun } : {}) };
+    buildRoom();
+    for (const o of state.items) placeItem(o);
+    commit();
+  }
   if (t === 'room') selId = null;
   roomSel = null;
   cutA = null;
@@ -1870,6 +1876,13 @@ const MENU = {
     commit();
     homeView();
     toast('Новая комната. Вернуть прежнюю — кнопка ↶');
+  },
+  blank() {                             // чистый лист: ни комнаты, ни предметов — только сетка
+    const snap = state.snap, grid = state.grid;
+    load({ v: 1, room: { w: 50, d: 50, h: 20, floor: '#d9c7a8', wall: '#f4f1ea', blank: true }, snap, grid, items: [], dims: [] });
+    commit();
+    homeView();
+    toast('Чистый лист. Комнату можно добавить инструментом «Комната». Вернуть прежнее — кнопка ↶');
   },
   help() { $('#helpDlg').showModal(); },
 };
@@ -2322,6 +2335,10 @@ function updateXRVis() {
   gridLines.visible = !bare && state.grid !== false;
   farGrid.visible = state.grid !== false;
   outline.visible = shadowFloor.visible = bare;
+  if (state.room.blank) {               // чистый лист: комнаты не видно, тени ложатся прямо на подложку
+    floorMesh.visible = wallMesh.visible = wallEdges.visible = gridLines.visible = outline.visible = false;
+    shadowFloor.visible = true;
+  }
   world.visible = !ar || xr.anchored;
   const b = $('[data-xr="mini"]');
   if (b) b.textContent = xr.mini ? 'Размер 1:1' : 'Макет';
