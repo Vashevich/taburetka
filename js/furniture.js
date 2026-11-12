@@ -106,7 +106,7 @@ class Builder {
   // «кость» между двумя точками и шар-сустав — для деревянного человечка
   seg(p, q, r, m = this.m) {
     const a = new THREE.Vector3(...p), b = new THREE.Vector3(...q), d = b.clone().sub(a), len = Math.max(d.length(), 0.004);
-    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.82, r, len, 14), m);
+    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.82, r, len, 20), m);
     mesh.position.copy(a).add(b).multiplyScalar(0.5);
     mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.multiplyScalar(1 / len));
     return this.finish(mesh);

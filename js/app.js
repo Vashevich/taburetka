@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=38';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=39';
 
 const STORE = 'taburetka.project.v1';
 
@@ -982,7 +982,7 @@ function addGumball(it) {
   }
   const arc = part(HCOL.y, 0, 0);                           // дуга между красной и зелёной стрелкой: поворот
   put(arc, new THREE.TorusGeometry(0.72, 0.02, 8, 28, Math.PI / 2).rotateX(Math.PI / 2));
-  for (const a of [22, 34, 45, 56, 68]) { const r = THREE.MathUtils.degToRad(a); grip(arc, [0.72 * Math.cos(r), 0, 0.72 * Math.sin(r)], { kind: 'rot' }); }
+  for (const a of [16, 24, 32, 40, 48, 56, 64, 72]) { const r = THREE.MathUtils.degToRad(a); grip(arc, [0.72 * Math.cos(r), 0, 0.72 * Math.sin(r)], { kind: 'rot' }); }
 }
 // высота видимой области (в единицах world) на расстоянии объекта — для элементов постоянного экранного размера
 function viewHeightAt(obj) {
