@@ -52,6 +52,20 @@ class Builder {
     mesh.position.set(x, y + h / 2, z);
     return this.finish(mesh);
   }
+  // «кость» между двумя точками и шар-сустав — для деревянного человечка
+  seg(p, q, r, m = this.m) {
+    const a = new THREE.Vector3(...p), b = new THREE.Vector3(...q), d = b.clone().sub(a), len = Math.max(d.length(), 0.004);
+    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.82, r, len, 14), m);
+    mesh.position.copy(a).add(b).multiplyScalar(0.5);
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.multiplyScalar(1 / len));
+    return this.finish(mesh);
+  }
+  ball(p, r, m = this.m2, sy = 1) {
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), m);
+    mesh.position.set(...p);
+    mesh.scale.y = sy;
+    return this.finish(mesh);
+  }
   // цилиндр/конус единичного радиуса масштабируется до эллипса sx × sz
   cyl(rTop, rBot, h, x, y, z, m = this.m, sx = 1, sz = 1) {
     h = Math.max(h, 0.004);
@@ -303,13 +317,30 @@ const BUILD = {
     b.box(w - 0.1, h - 0.1, 0.008, 0, 0.05, 0,
       std('#bfe3f2', { transparent: true, opacity: 0.35, roughness: 0.1 }));
   },
-  human(b, w, d, h) {
-    const head = 0.22;
-    b.cyl(0.5, 0.36, h - head - 0.02, 0, 0, 0, b.m, w, d);
-    const s = new THREE.Mesh(new THREE.SphereGeometry(head / 2, 20, 14), b.m3);
-    s.position.set(0, h - head / 2, 0);
-    b.finish(s);
+  // Деревянный человечек на шарнирах. Стоя — начало координат под ступнями; сидя — на сиденье под тазом,
+  // бёдра вперёд, голени свисают вниз.
+  human(b, w, d, h, o = {}) {
+    const k = h / 1.75, sit = o.pose === 'sit', py = sit ? 0.1 : 0.92, S = (p) => p.map((v) => v * k);
+    b.ball(S([0, py + 0.72, 0]), 0.1 * k, b.m, 1.18);                 // голова
+    b.seg(S([0, py + 0.52, 0]), S([0, py + 0.63, 0]), 0.035 * k, b.m2);   // шея
+    b.seg(S([0, py + 0.14, 0]), S([0, py + 0.52, 0]), 0.17 * k);      // грудь
+    b.ball(S([0, py + 0.1, 0]), 0.085 * k);                           // поясница
+    b.seg(S([0, py + 0.08, 0]), S([0, py - 0.08, 0]), 0.15 * k);      // таз
+    for (const s of [-1, 1]) {
+      const sh = [s * 0.215, py + 0.47, 0], el = sit ? [s * 0.235, py + 0.2, 0.03] : [s * 0.24, py + 0.19, 0];
+      const wr = sit ? [s * 0.19, py + 0.09, 0.27] : [s * 0.235, py - 0.07, 0.03];
+      b.ball(S(sh), 0.055 * k); b.seg(S(sh), S(el), 0.042 * k);
+      b.ball(S(el), 0.042 * k); b.seg(S(el), S(wr), 0.036 * k);
+      b.ball(S(wr), 0.045 * k, b.m);                                  // кисть
+      const hip = [s * 0.09, py - 0.04, 0], kn = sit ? [s * 0.09, py - 0.02, 0.43] : [s * 0.09, 0.5, 0];
+      const an = sit ? [s * 0.09, py - 0.44, 0.43] : [s * 0.09, 0.08, 0];
+      b.ball(S(hip), 0.07 * k); b.seg(S(hip), S(kn), 0.062 * k);
+      b.ball(S(kn), 0.055 * k); b.seg(S(kn), S(an), 0.048 * k);
+      b.ball(S(an), 0.042 * k);
+      b.box(0.09 * k, 0.05 * k, 0.24 * k, an[0] * k, (an[1] - 0.08) * k, (an[2] + 0.06) * k);   // ступня
+    }
   },
+
 };
 
 // Размеры в метрах: w — ширина, d — глубина, h — высота, y — высота от пола.
@@ -345,7 +376,7 @@ export const CATALOG = [
   { type: 'wall', name: 'Перегородка', w: 2.0, d: 0.1, h: 2.7, color: '#f2efe9' },
   { type: 'door', name: 'Дверь', w: 0.9, d: 0.1, h: 2.05, color: '#d9c7a8' },
   { type: 'window', name: 'Окно', w: 1.4, d: 0.1, h: 1.4, y: 0.85, color: '#f5f5f2' },
-  { type: 'human', name: 'Человек 175 см', w: 0.45, d: 0.28, h: 1.75, color: '#7a8fa3' },
+  { type: 'human', name: 'Человек', w: 0.5, d: 0.3, h: 1.75, color: '#c8a27a' },
 ];
 
 export const CATS = [['all', 'Всё'], ['seat', 'Сиденья'], ['table', 'Столы'], ['store', 'Шкафы и полки'],
@@ -361,9 +392,9 @@ const CAT_OF = {
 };
 for (const d of CATALOG) d.cat = Object.keys(CAT_OF).find((k) => CAT_OF[k].includes(d.type)) || 'decor';
 
-export function fillBlank(group, type, w, d, h, color, open) {
+export function fillBlank(group, type, w, d, h, color, open, pose) {
   const b = new Builder(group, color || '#f1eee8');
-  (BUILD[type] || BUILD.box)(b, w, d, h);
+  (BUILD[type] || BUILD.box)(b, w, d, h, { pose });
   for (const c of group.children)
     if (c.userData.act) applyAct(c, open && open.includes(c.userData.part) ? 1 : 0);
   return group;

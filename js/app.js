@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=31';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=32';
 
 const STORE = 'taburetka.project.v1';
 
@@ -400,7 +400,7 @@ function buildRoom() {
 // ───────────────────────── предметы ─────────────────────────
 function fillItem(it, g) {
   disposeChildren(g);
-  fillBlank(g, it.type, it.w, it.d, it.h, it.color, it.open);
+  fillBlank(g, it.type, it.w, it.d, it.h, it.color, it.open, it.pose);
 }
 function placeItem(it) {
   const g = objs.get(it.id);
@@ -549,6 +549,10 @@ function dragMove(it, g, lr) {
   if (!ok) return false;
   if (g.free) { if (it.y > restY(it, it.x, it.z) + 0.02) it.hold = 'free'; else delete it.hold; }
   else if (g.float) it.hold = 'wall'; else delete it.hold;
+  if (it.type === 'human' && !g.free) {  // человечек: на мебели садится, на полу встаёт
+    const pose = !g.float && it.y > floorAt(it.x, it.z) + 0.05 ? 'sit' : 'stand';
+    if ((it.pose || 'stand') !== pose) { if (pose === 'sit') it.pose = 'sit'; else delete it.pose; fillItem(it, objs.get(it.id)); }
+  }
   for (const r of g.riders || []) { r.o.x = r3(it.x + r.dx); r.o.y = r3(it.y + r.dy); r.o.z = r3(it.z + r.dz); placeItem(r.o); refreshDims(r.o.id); }
   return true;
 }
@@ -1485,6 +1489,13 @@ function onTap(e) {
 const anims = [];
 function tapPart(pk) {
   const it = item(pk.id);
+  if (it && it.type === 'human') {      // «Действие» по человечку: встать или сесть на том же месте
+    if (it.pose === 'sit') delete it.pose; else it.pose = 'sit';
+    fillItem(it, objs.get(it.id));
+    ptCache.delete(it.id);
+    commit();
+    return true;
+  }
   let o = pk.hit.object;
   while (o && !o.userData.act && o.parent !== itemsG) o = o.parent;
   if (!it || !o || !o.userData.act) return false;
@@ -1513,7 +1524,7 @@ const HINTS = {
   select: 'Тащите предмет: он всегда примагничен — к полу, к другой мебели, к стене или потолку. Поднять в воздух — инструмент «По осям»',
   room: 'Комната: нажмите на точку, ребро или плашку грани — появятся стрелки. Разрез грани: нажмите на ребро, затем на другое ребро той же грани. Солнце — направление света',
   erase: 'Ластик: наведите на предмет или размер — он станет красным — и нажмите, чтобы удалить',
-  act: 'Нажимайте на дверцы и ящики — они открываются и закрываются',
+  act: 'Нажимайте на дверцы и ящики — они открываются; по человечку — он садится или встаёт',
   move3d: 'Тащите стрелку: красная и зелёная — вдоль пола, синяя — вверх-вниз',
   rotate: 'Выберите предмет и тащите вокруг него — поворот с шагом 15°',
   pull: 'Выберите предмет и тащите двусторонние стрелки на его гранях',
