@@ -6,7 +6,7 @@ import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, fillBlank, EDGE } from './furniture.js';
+import { CATALOG, fillBlank, applyAct, EDGE } from './furniture.js?v=3';
 
 const LIBS = 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/';
 const KHR = 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/';
@@ -14,7 +14,7 @@ const SAMPLES = [
   ['Стул', 'SheenChair'], ['Бархатный диван', 'GlamVelvetSofa'], ['Диван кожа/дерево', 'SheenWoodLeatherSofa'],
   ['Кресло', 'ChairDamaskPurplegold'], ['Лампа', 'IridescenceLamp'], ['Фонарь', 'AnisotropyBarnLamp'],
   ['Растение', 'DiffuseTransmissionPlant'], ['Холодильник', 'CommercialRefrigerator'],
-].map(([name, id]) => ({ name, url: `${KHR}${id}/glTF-Binary/${id}.glb` }));
+].map(([name, id]) => ({ name, url: `${KHR}${id}/glTF-Binary/${id}.glb`, shot: `${KHR}${id}/screenshot/screenshot.jpg` }));
 const STORE = 'taburetka.project.v1';
 
 const $ = (s) => document.querySelector(s);
@@ -213,6 +213,27 @@ function getGLTFLoader() {
 }
 const extOf = (s) => ((String(s).split(/[?#]/)[0].match(/\.([a-z0-9]+)$/i) || [])[1] || '').toLowerCase();
 
+const getJSON = async (url) => {
+  for (let i = 0; ; i++) {
+    try { const r = await fetch(url); if (!r.ok) throw new Error('HTTP ' + r.status); return await r.json(); }
+    catch (e) { if (i >= 2) throw e; await new Promise((res) => setTimeout(res, 600)); }
+  }
+};
+async function loadPolyHaven(id) {      // модели Poly Haven (CC0): glTF + отдельные текстуры
+  const files = await getJSON('https://api.polyhaven.com/files/' + encodeURIComponent(id));
+  const g = files.gltf && (files.gltf['1k'] || files.gltf['2k'] || Object.values(files.gltf)[0]);
+  if (!g || !g.gltf) throw new Error('у этой модели нет glTF');
+  const inc = Object.entries(g.gltf.include || {});
+  const manager = new THREE.LoadingManager();
+  manager.setURLModifier((u) => {
+    let d = u;
+    try { d = decodeURIComponent(u); } catch { /* как есть */ }
+    for (const [k, v] of inc) if (d.endsWith('/' + k) || d === k) return v.url;
+    return u;
+  });
+  return (await new GLTFLoader(manager).loadAsync(g.gltf.url)).scene;
+}
+
 async function loadTemplate(src) {
   let url = src, name = src, revoke = null;
   if (src.startsWith('idb:')) {
@@ -224,7 +245,8 @@ async function loadTemplate(src) {
   try {
     const ext = extOf(name);
     let object;
-    if (ext === 'obj') {
+    if (src.startsWith('ph:')) object = await loadPolyHaven(src.slice(3));
+    else if (ext === 'obj') {
       const { OBJLoader } = await import('three/addons/loaders/OBJLoader.js');
       object = await new OBJLoader().loadAsync(url);
     } else if (ext === 'stl') {
@@ -296,7 +318,7 @@ function fillModel(it, g) {
 function fillItem(it, g) {
   disposeChildren(g);
   if (it.type === 'model') fillModel(it, g);
-  else fillBlank(g, it.type, it.w, it.d, it.h, it.color);
+  else fillBlank(g, it.type, it.w, it.d, it.h, it.color, it.open);
 }
 function placeItem(it) {
   const g = objs.get(it.id);
@@ -341,6 +363,116 @@ function snapPos(it, x, z) {
   if (sx !== null) nx = sx;
   if (sz !== null) nz = sz;
   return [r3(nx), r3(nz)];
+}
+// ── «гравитация»: на что встанет предмет в точке (x, z) ──
+const NOSUP = new Set(['wall', 'door', 'window', 'human', 'plant', 'lamp', 'tv']);
+const downRay = new THREE.Raycaster();
+function restY(it, x, z) {
+  if (it.type === 'rug') return 0;
+  const cands = [];
+  for (const o of state.items) {
+    if (o.id === it.id || NOSUP.has(o.type)) continue;
+    const f = footprint(o);
+    if (Math.abs(x - o.x) > f.hx || Math.abs(z - o.z) > f.hz) continue;
+    const g = objs.get(o.id);
+    if (g) cands.push(g);
+  }
+  if (!cands.length) return 0;
+  world.updateMatrixWorld(true);
+  downRay.set(new THREE.Vector3(x, 1000, z).applyMatrix4(world.matrixWorld),
+    new THREE.Vector3(0, -1, 0).transformDirection(world.matrixWorld));
+  const tops = new Map();
+  for (const h of downRay.intersectObjects(cands, true)) {
+    let g = h.object;
+    while (g && g.parent !== itemsG) g = g.parent;
+    const o = g && item(g.userData.id);
+    if (o && !tops.has(o)) tops.set(o, world.worldToLocal(h.point.clone()).y);
+  }
+  let level = 0;                        // если предмет не помещается под опорой — он встаёт на неё
+  for (const [o, top] of [...tops].sort((a, b) => a[0].y - b[0].y))
+    if (o.y - level < it.h - 1e-3) level = Math.max(level, top);
+  if (level + it.h > state.room.h + 1e-3) level = 0;
+  return r3(Math.max(0, level));
+}
+function roomExit(lr) {                 // точка, в которой луч выходит из объёма комнаты
+  const R = state.room, mn = [-R.w / 2, 0, -R.d / 2], mx = [R.w / 2, R.h, R.d / 2];
+  const o = lr.o.toArray(), d = lr.d.toArray();
+  let t0 = -Infinity, t1 = Infinity;
+  for (let i = 0; i < 3; i++) {
+    if (Math.abs(d[i]) < 1e-8) { if (o[i] < mn[i] || o[i] > mx[i]) return null; continue; }
+    const a = (mn[i] - o[i]) / d[i], b = (mx[i] - o[i]) / d[i];
+    t0 = Math.max(t0, Math.min(a, b)); t1 = Math.min(t1, Math.max(a, b));
+  }
+  return t1 > 0 && t1 >= t0 ? lr.o.clone().addScaledVector(lr.d, t1) : null;
+}
+function makeGrab(it, pl, free = false) {   // pl — точка захвата в координатах world
+  return { id: it.id, rel: pl.y - it.y, off: { x: it.x - pl.x, z: it.z - pl.z }, base: it.y, free,
+    float: it.y > restY(it, it.x, it.z) + 0.02, changed: false, turned: false };
+}
+// Перетаскивание: предмет едет по полу, встаёт на другие предметы, упирается в стены,
+// а если тянуть дальше в стену — поднимается по ней до потолка.
+function dragMove(it, g, lr) {
+  const R = state.room, snap = state.snap > 0;
+  if (g.free || !snap) {
+    const p = hitPlaneY(lr, it.y + g.rel);
+    if (!p) return false;
+    [it.x, it.z] = snapPos(it, p.x + g.off.x, p.z + g.off.z);
+    return true;
+  }
+  let base = g.float ? it.y : g.base, x = 0, z = 0, p = null, ceil = false;
+  for (let i = 0; i < 2; i++) {
+    p = hitPlaneY(lr, base + g.rel);
+    if (p && p.distanceTo(lr.o) > 80) p = null;
+    if (!p) break;
+    x = p.x + g.off.x; z = p.z + g.off.z;
+    if (g.float) break;
+    const s = restY(it, x, z);
+    if (Math.abs(s - base) < 1e-4) break;
+    base = s;
+  }
+  if (!p) {                             // луч смотрит выше горизонта: цель — стена или потолок
+    const e = roomExit(lr);
+    if (!e) return false;
+    ceil = e.y > R.h - 1e-3;
+    x = e.x + (ceil ? 0 : g.off.x); z = e.z + (ceil ? 0 : g.off.z);
+  }
+  const f = footprint(it), fitX = R.w >= 2 * f.hx, fitZ = R.d >= 2 * f.hz;
+  const overX = fitX && (x - f.hx < -R.w / 2 - 0.02 || x + f.hx > R.w / 2 + 0.02);
+  const overZ = fitZ && (z - f.hz < -R.d / 2 - 0.02 || z + f.hz > R.d / 2 + 0.02);
+  [x, z] = snapPos(it, x, z);
+  if (fitX) x = clamp(x, -R.w / 2 + f.hx, R.w / 2 - f.hx);
+  if (fitZ) z = clamp(z, -R.d / 2 + f.hz, R.d / 2 - f.hz);
+  let climb = null;
+  if (overX && Math.abs(lr.d.x) > 1e-5) {
+    const t = (x - g.off.x - lr.o.x) / lr.d.x;
+    if (t > 0) { climb = lr.o.y + lr.d.y * t - g.rel; z = lr.o.z + lr.d.z * t + g.off.z; }
+  } else if (overZ && Math.abs(lr.d.z) > 1e-5) {
+    const t = (z - g.off.z - lr.o.z) / lr.d.z;
+    if (t > 0) { climb = lr.o.y + lr.d.y * t - g.rel; x = lr.o.x + lr.d.x * t + g.off.x; }
+  }
+  if (climb !== null) {
+    const st = state.snap;
+    x = Math.round(x / st) * st; z = Math.round(z / st) * st;
+    if (fitX) x = clamp(x, -R.w / 2 + f.hx, R.w / 2 - f.hx);
+    if (fitZ) z = clamp(z, -R.d / 2 + f.hz, R.d / 2 - f.hz);
+  }
+  const rest = restY(it, x, z);
+  let y = g.float ? it.y : rest;
+  if (climb !== null) {
+    const dead = g.float ? 0.05 : 0.35;   // стоящий на полу предмет отрывается не сразу
+    y = climb < rest + dead ? rest : Math.round(climb / state.snap) * state.snap;
+  }
+  if (R.h >= it.h && (ceil || y + it.h > R.h - 0.06)) y = R.h - it.h;
+  it.x = r3(x); it.z = r3(z); it.y = r3(Math.max(0, y));
+  g.base = g.float ? it.y : rest;
+  return true;
+}
+const AXES = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
+function axisParam(lr, a0, u) {         // ближайшая к лучу точка на оси, проходящей через a0
+  const w = a0.clone().sub(lr.o), b = u.dot(lr.d), den = 1 - b * b;
+  if (den < 1e-4) return null;
+  const s = (b * lr.d.dot(w) - u.dot(w)) / den;
+  return Math.abs(s) < 200 ? s : null;
 }
 const snapLen = (v) => (state.snap > 0 ? Math.max(state.snap, Math.round(v / state.snap) * state.snap) : v);
 const snapRot = (a) => { const s = Math.PI / 12; return state.snap > 0 ? Math.round(a / s) * s : a; };
@@ -531,7 +663,7 @@ function pickItem() {
 // ───────────────────────── выделение и «ручки» ─────────────────────────
 const SEL = new THREE.LineBasicMaterial({ color: 0x1f6feb, depthTest: false, transparent: true });
 const HCOL = { x: 0xd9482b, z: 0x2e9e4f, y: 0x1f6feb };
-let handles = [];
+let handles = [], arrows = [];
 const ringR = (it) => Math.hypot(it.w, it.d) / 2 + 0.12;
 
 function select(id) {
@@ -539,8 +671,11 @@ function select(id) {
   updateGizmo(); updateProps(); updateStatus(); updateXRHint();
 }
 function updateGizmo() {
-  for (const c of [...gizmo.children]) { gizmo.remove(c); c.geometry?.dispose(); if (c.material !== SEL) c.material?.dispose?.(); }
-  handles = [];
+  for (const c of [...gizmo.children]) {
+    gizmo.remove(c);
+    c.traverse((o) => { o.geometry?.dispose(); if (o.material && o.material !== SEL) o.material.dispose(); });
+  }
+  handles = []; arrows = [];
   const it = sel();
   gizmo.visible = !!it;
   if (!it) return;
@@ -560,6 +695,29 @@ function updateGizmo() {
       hm.userData = { axis, sign, cs: coarse ? 0.02 : 0.012 };
       gizmo.add(hm);
       handles.push(hm);
+    }
+  }
+  if (tool === 'move3d' && !it.lock) {
+    const hold = new THREE.Group();     // оси комнаты, а не предмета
+    hold.position.y = it.h / 2;
+    hold.rotation.y = -it.rot;
+    gizmo.add(hold);
+    for (const [axis, rx, rz] of [['x', 0, -Math.PI / 2], ['y', 0, 0], ['z', Math.PI / 2, 0]]) {
+      const a = new THREE.Group(), m = new THREE.MeshBasicMaterial({ color: HCOL[axis], depthTest: false, transparent: true });
+      a.rotation.set(rx, 0, rz);
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 1, 8).translate(0, 0.5, 0), m);
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.24, 16).translate(0, 1.1, 0), m);
+      shaft.renderOrder = cone.renderOrder = 11;
+      a.add(shaft, cone);
+      for (const t of [0.4, 0.75, 1.1]) {
+        const pk = new THREE.Object3D();
+        pk.position.y = t;
+        pk.userData = { axis, arrow: a };
+        a.add(pk);
+        handles.push(pk);
+      }
+      hold.add(a);
+      arrows.push(a);
     }
   }
   if (tool === 'rotate' && !it.lock) {
@@ -585,7 +743,8 @@ function viewHeightAt(obj) {
   return (_v.distanceTo(_c) * 2 * Math.tan(THREE.MathUtils.degToRad(c.fov / 2))) / ws;
 }
 function updateConstSize() {
-  for (const h of handles) h.scale.setScalar(h.userData.cs * viewHeightAt(h));
+  for (const h of handles) if (h.userData.cs) h.scale.setScalar(h.userData.cs * viewHeightAt(h));
+  for (const a of arrows) a.scale.setScalar((coarse ? 0.16 : 0.12) * viewHeightAt(a));
   if (snapMarker.visible) snapMarker.scale.setScalar((snapMarker.userData.cs || 0.01) * viewHeightAt(snapMarker));
   for (const g of [dimsG, tmpG]) for (const o of g.children) {
     if (!o.userData.label) continue;
@@ -597,7 +756,8 @@ function pickHandle() {
   let best = null, bd = Infinity;
   for (const h of handles) {
     h.getWorldPosition(_v);
-    const d = ray.ray.distanceToPoint(_v), lim = h.scale.x * (world.scale.x || 1) * 2.4;
+    const rad = h.userData.arrow ? h.userData.arrow.scale.x * 0.1 : h.scale.x;
+    const d = ray.ray.distanceToPoint(_v), lim = rad * (world.scale.x || 1) * 2.4;
     if (d < lim && d < bd) { bd = d; best = h; }
   }
   return best;
@@ -677,15 +837,36 @@ function nearest(points, lim) {
   for (const p of points) { const d = pxDist(p); if (d < bd) { bd = d; best = p; } }
   return best;
 }
+const ptCache = new Map();
+function itemPoints(it) {                // углы габарита + настоящие углы деталей болванки
+  const g = objs.get(it.id);
+  const key = [it.x, it.y, it.z, it.rot, it.w, it.d, it.h, it.type, g?.children.length, (it.open || []).join('.')].join();
+  const c = ptCache.get(it.id);
+  if (c && c.key === key) return c.pts;
+  const pts = [];
+  itemCorners(it, pts);
+  if (g && it.type !== 'model') {
+    g.updateMatrixWorld(true);
+    g.traverse((o) => {
+      const pos = o.isMesh && o.geometry.attributes.position;
+      if (!pos || pos.count > 300) return;
+      for (let i = 0; i < pos.count; i++)
+        pts.push(world.worldToLocal(new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld)));
+    });
+  }
+  ptCache.set(it.id, { key, pts });
+  return pts;
+}
 function measurePoint() {
   world.updateMatrixWorld(true);
   const lim = coarse ? 30 : 14, R = state.room;
   const corners = [];
-  for (const it of state.items) itemCorners(it, corners);
+  for (const it of state.items) corners.push(...itemPoints(it));
   for (const x of [-R.w / 2, R.w / 2]) for (const z of [-R.d / 2, R.d / 2])
     corners.push(new THREE.Vector3(x, 0, z), new THREE.Vector3(x, R.h, z));
+  for (const m of state.dims) corners.push(new THREE.Vector3(...m.a), new THREE.Vector3(...m.b));
   const c = nearest(corners, lim);
-  if (c) return { p: c, kind: 'corner' };
+  if (c) return { p: c.clone(), kind: 'corner' };
   const pk = pickItem();
   if (pk) {
     const f = pk.hit.face, pos = pk.hit.object.geometry?.attributes?.position;
@@ -720,7 +901,7 @@ function onDown(e) {
   down = null;
   if (e.button !== 0) return;
   down = { pid: e.pointerId, x: e.clientX, y: e.clientY, multi: false, moved: false, noTap: false };
-  if (tool === 'measure') return;
+  if (tool === 'measure' || tool === 'act') return;
   setRay(e);
   const it = sel(), lr = localRay(ray.ray);
   if (it && tool === 'pull' && !it.lock) {
@@ -729,6 +910,16 @@ function onDown(e) {
       down.noTap = true;
       startDrag({ mode: 'pull', id: it.id, axis: h.userData.axis, sign: h.userData.sign, rot: it.rot,
         w0: it.w, d0: it.d, h0: it.h, x0: it.x, z0: it.z, hy: it.y + it.h / 2 }, e);
+      return;
+    }
+  }
+  if (it && tool === 'move3d' && !it.lock) {
+    const h = pickHandle();
+    if (h) {
+      down.noTap = true;
+      const a0 = new THREE.Vector3(it.x, it.y + it.h / 2, it.z);
+      startDrag({ mode: 'axis', id: it.id, axis: h.userData.axis, a0, s0: axisParam(lr, a0, AXES[h.userData.axis]),
+        x0: it.x, y0: it.y, z0: it.z }, e);
       return;
     }
   }
@@ -747,7 +938,7 @@ function onDown(e) {
     if (t.lock) return;
     world.updateMatrixWorld(true);
     const pl = world.worldToLocal(pk.point);
-    startDrag({ mode: 'move', id: t.id, py: pl.y, off: { x: t.x - pl.x, z: t.z - pl.z } }, e);
+    startDrag({ mode: 'move', ...makeGrab(t, pl, tool === 'move3d') }, e);
   }
 }
 function applyPull(it, d, lr) {
@@ -789,9 +980,22 @@ function onMove(e) {
     setRay(e);
     const lr = localRay(ray.ray);
     if (drag.mode === 'move') {
-      const p = hitPlaneY(lr, drag.py);
-      if (!p) return;
-      [it.x, it.z] = snapPos(it, p.x + drag.off.x, p.z + drag.off.z);
+      if (!dragMove(it, drag, lr)) return;
+      placeItem(it);
+      gizmo.position.set(it.x, it.y, it.z);
+    } else if (drag.mode === 'axis') {
+      const sp = axisParam(lr, drag.a0, AXES[drag.axis]);
+      if (sp === null) return;
+      if (drag.s0 === null) { drag.s0 = sp; return; }
+      const dl = sp - drag.s0, st = state.snap, sn = (v) => (st > 0 ? Math.round(v / st) * st : v);
+      if (drag.axis === 'x') it.x = r3(sn(drag.x0 + dl));
+      else if (drag.axis === 'z') it.z = r3(sn(drag.z0 + dl));
+      else {
+        let y = sn(drag.y0 + dl);
+        const H = state.room.h;
+        if (st > 0) { if (Math.abs(y) < 0.03) y = 0; if (Math.abs(y + it.h - H) < 0.06) y = H - it.h; }
+        it.y = r3(y);
+      }
       placeItem(it);
       gizmo.position.set(it.x, it.y, it.z);
     } else if (drag.mode === 'rotate') {
@@ -853,7 +1057,34 @@ function onTap(e) {
     return;
   }
   const pk = pickItem();
+  if (tool === 'act') {
+    if (!pk) return;
+    if (!tapPart(pk)) toast(objs.get(pk.id).children.some((c) => c.userData.act)
+      ? 'Нажмите на дверцу или ящик' : 'У этого предмета нет подвижных частей', 1800);
+    return;
+  }
   select(pk ? pk.id : null);
+}
+// «Действие»: открыть / закрыть дверцу или ящик, по которому попали
+const anims = [];
+function tapPart(pk) {
+  const it = item(pk.id);
+  let o = pk.hit.object;
+  while (o && !o.userData.act && o.parent !== itemsG) o = o.parent;
+  if (!it || !o || !o.userData.act) return false;
+  const set = new Set(it.open || []), idx = o.userData.part, open = !set.has(idx);
+  if (open) set.add(idx); else set.delete(idx);
+  if (set.size) it.open = [...set].sort((a, b) => a - b); else delete it.open;
+  anims.push({ part: o, to: open ? 1 : 0 });
+  commit();
+  return true;
+}
+function runAnims(dt) {
+  for (let i = anims.length - 1; i >= 0; i--) {
+    const a = anims[i], t = a.part.userData.t || 0, n = a.to > t ? Math.min(a.to, t + dt * 2.6) : Math.max(a.to, t - dt * 2.6);
+    applyAct(a.part, n);
+    if (n === a.to) anims.splice(i, 1);
+  }
 }
 canvas.addEventListener('pointerdown', onDown, true);
 canvas.addEventListener('pointermove', onMove);
@@ -863,7 +1094,9 @@ canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // ───────────────────────── интерфейс ─────────────────────────
 const HINTS = {
-  select: 'Нажмите на предмет и тащите его по полу',
+  select: 'Тащите предмет: он встаёт на пол или на другую мебель, у стены — поднимается по ней',
+  act: 'Нажимайте на дверцы и ящики — они открываются и закрываются',
+  move3d: 'Тащите стрелку: красная и зелёная — вдоль пола, синяя — вверх-вниз',
   rotate: 'Выберите предмет и тащите вокруг него — поворот с шагом 15°',
   pull: 'Выберите предмет и тащите цветные шарики на гранях',
   measure: 'Рулетка: укажите первую точку — липнет к углам',
@@ -871,7 +1104,8 @@ const HINTS = {
 function updateStatus() {
   const it = sel();
   let s = HINTS[tool];
-  if (tool === 'measure') s = (measureA ? 'Рулетка: укажите вторую точку' : HINTS.measure) + (snapKind ? ` · привязка: ${snapKind}` : '');
+  if (tool === 'act') s = HINTS.act;
+  else if (tool === 'measure') s = (measureA ? 'Рулетка: укажите вторую точку' : HINTS.measure) + (snapKind ? ` · привязка: ${snapKind}` : '');
   else if (it) s = `${it.name} — ${fmt(it.w)} × ${fmt(it.d)} × ${fmt(it.h)}`.replace(/ см(?= ×)/g, '');
   $('#status').textContent = s;
 }
@@ -950,7 +1184,10 @@ for (const b of $$('#catalog [data-tab]')) b.onclick = () => {
   for (const o of $$('#catalog [data-tab]')) o.classList.toggle('on', o === b);
   $('#tabBlanks').hidden = b.dataset.tab !== 'blanks';
   $('#tabWeb').hidden = b.dataset.tab !== 'web';
+  if (b.dataset.tab === 'web') openPolyHaven();
 };
+$('#phSearch').addEventListener('input', (e) => { ph.q = e.target.value; ph.shown = 48; renderPolyHaven(); });
+$('#phMore').onclick = () => { ph.shown += 48; renderPolyHaven(); };
 function afterAdd() { if (innerWidth <= 640 || renderer.xr.isPresenting) toggleCatalog(false); }
 function buildCatalog() {
   const thumbs = makeThumbs();
@@ -967,12 +1204,68 @@ function buildCatalog() {
     grid.append(b);
   }
   const sg = $('#samples');
-  for (const s of SAMPLES) {
-    const b = document.createElement('button');
-    b.textContent = s.name;
-    b.onclick = () => { addModel(s.url, s.name); afterAdd(); };
-    sg.append(b);
+  for (const sm of SAMPLES) sg.append(tile(sm.name, '', sm.shot, () => { addModel(sm.url, sm.name); afterAdd(); }));
+}
+function tile(name, sub, img, onclick) {
+  const b = document.createElement('button');
+  if (img) {
+    const im = new Image();
+    im.loading = 'lazy'; im.alt = ''; im.src = img;
+    im.onerror = () => im.remove();
+    b.append(im);
   }
+  const n = document.createElement('span');
+  n.textContent = name;
+  b.append(n);
+  if (sub) { const sm = document.createElement('small'); sm.textContent = sub; b.append(sm); }
+  b.onclick = onclick;
+  return b;
+}
+// Живой каталог Poly Haven: список и картинки подгружаются при открытии вкладки
+const PH_CATS = [['Мебель', ['furniture']], ['Сиденья', ['seating']], ['Столы', ['table']], ['Полки', ['shelves']],
+  ['Свет', ['lighting']], ['Техника', ['appliances', 'electronics']],
+  ['Декор', ['decorative', 'vases', 'wall decoration', 'books', 'dishes']],
+  ['Растения', ['potted plants', 'flowers']], ['Всё', null]];
+const ph = { list: null, loading: false, cat: 0, q: '', shown: 48 };
+async function openPolyHaven() {
+  if (ph.list || ph.loading) return;
+  ph.loading = true;
+  $('#phGrid').textContent = 'Загружаю каталог…';
+  try {
+    const data = await getJSON('https://api.polyhaven.com/assets?t=models');
+    ph.list = Object.entries(data).map(([id, a]) => ({ id, name: a.name || id, cats: a.categories || [],
+      text: `${a.name} ${(a.tags || []).join(' ')} ${(a.categories || []).join(' ')}`.toLowerCase(),
+      dim: Array.isArray(a.dimensions) ? a.dimensions : null, pop: a.download_count || 0 }))
+      .sort((x, y) => y.pop - x.pop);
+    const chips = $('#phCats');
+    PH_CATS.forEach(([label], i) => {
+      const c = document.createElement('button');
+      c.textContent = label;
+      c.onclick = () => { ph.cat = i; ph.shown = 48; renderPolyHaven(); };
+      chips.append(c);
+    });
+    renderPolyHaven();
+  } catch (e) {
+    console.error(e);
+    $('#phGrid').textContent = 'Каталог не загрузился — проверьте сеть и откройте вкладку ещё раз.';
+  }
+  ph.loading = false;
+}
+function renderPolyHaven() {
+  if (!ph.list) return;
+  [...$('#phCats').children].forEach((c, i) => c.classList.toggle('on', i === ph.cat));
+  const cats = PH_CATS[ph.cat][1], q = ph.q.trim().toLowerCase();
+  const res = ph.list.filter((m) => (q ? m.text.includes(q) : !cats || m.cats.some((c) => cats.includes(c))));
+  const grid = $('#phGrid');
+  grid.textContent = '';
+  for (const m of res.slice(0, ph.shown)) {
+    const dim = m.dim ? m.dim.map((v) => Math.round(v / 10)) : null;      // мм → см
+    grid.append(tile(m.name, dim ? `${dim[0]}×${dim[1]}×${dim[2]}` : '',
+      `https://cdn.polyhaven.com/asset_img/thumbs/${encodeURIComponent(m.id)}.png?width=200&height=150`,
+      () => { addModel('ph:' + m.id, m.name); afterAdd(); }));
+  }
+  if (!res.length) grid.textContent = 'Ничего не нашлось';
+  $('#phMore').hidden = res.length <= ph.shown;
 }
 function makeThumbs() {
   const out = {};
@@ -1080,6 +1373,8 @@ addEventListener('keydown', (e) => {
   if (mod) return;
   const it = sel();
   if (k === 'v' || k === 'м') setTool('select');
+  else if (k === 'm' || k === 'ь') setTool('move3d');
+  else if (k === 'i' || k === 'ш') setTool('act');
   else if (k === 'r' || k === 'к') setTool('rotate');
   else if (k === 'p' || k === 'з') setTool('pull');
   else if (k === 't' || k === 'е') setTool('measure');
@@ -1227,24 +1522,22 @@ function xrSelectStart(c, R) {
   if (!pk) { select(null); return; }
   select(pk.id);
   const it = item(pk.id);
-  if (it.lock) return;
   world.updateMatrixWorld(true);
   const pl = world.worldToLocal(pk.point);
-  c.userData.grab = { id: it.id, py: pl.y, off: { x: it.x - pl.x, z: it.z - pl.z }, changed: false, turned: false };
+  c.userData.grab = makeGrab(it, pl);
+  Object.assign(c.userData.grab, { pk, t0: performance.now(), moved: false });
 }
 function xrDrag(c, R, dt) {
   const g = c.userData.grab, it = item(g.id);
   if (!it) { c.userData.grab = null; return; }
   if (c.visible) {
-    const p = hitPlaneY(localRay(R), g.py);
-    if (p && p.distanceTo(new THREE.Vector3(it.x, g.py, it.z)) < 30) {
-      [it.x, it.z] = snapPos(it, p.x + g.off.x, p.z + g.off.z);
-      g.changed = true;
-    }
+    const bx = it.x, by = it.y, bz = it.z;
+    if (!it.lock && (g.moved || performance.now() - g.t0 > 220) && dragMove(it, g, localRay(R))) g.changed = true;
+    if (Math.abs(it.x - bx) + Math.abs(it.y - by) + Math.abs(it.z - bz) > 1e-4) g.moved = true;
   }
   const ax = c.userData.src?.gamepad?.axes;
   const sx = ax ? (Math.abs(ax[2] ?? 0) > Math.abs(ax[0] ?? 0) ? ax[2] : ax[0]) || 0 : 0;
-  if (Math.abs(sx) > 0.35) { it.rot -= sx * dt * 1.8; g.changed = g.turned = true; }
+  if (Math.abs(sx) > 0.35 && !it.lock) { it.rot -= sx * dt * 1.8; g.changed = g.turned = g.moved = true; }
   placeItem(it);
   gizmo.position.set(it.x, it.y, it.z);
   gizmo.rotation.y = it.rot;
@@ -1255,6 +1548,7 @@ function xrSelectEnd(c) {
   if (!g) return;
   const it = item(g.id);
   if (it && g.turned) { it.rot = snapRot(it.rot); placeItem(it); updateGizmo(); }
+  if (it && !g.moved && performance.now() - g.t0 < 350) tapPart(g.pk);
   if (g.changed) commit();
 }
 function updateAim(frame) {
@@ -1486,6 +1780,7 @@ function boot() {
     last = t;
     if (renderer.xr.isPresenting) xrTick(frame, dt);
     else ctl().update();
+    if (anims.length) runAnims(dt);
     updateConstSize();
     renderer.render(scene, renderer.xr.isPresenting ? camera : cam());
   });

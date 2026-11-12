@@ -24,6 +24,19 @@ class Builder {
     this.m = std(c);
     this.m2 = std(c.clone().multiplyScalar(0.72));
     this.m3 = std(c.clone().lerp(new THREE.Color('#ffffff'), 0.5));
+    this.parts = 0;
+  }
+  // подвижная часть (дверца, ящик): всё, что строится внутри fn, попадает в отдельную группу
+  part(x, y, z, act, fn) {
+    const prev = this.g, group = new THREE.Group();
+    group.position.set(x, y, z);
+    group.userData.act = act;
+    group.userData.part = this.parts++;
+    this.g = group;
+    fn();
+    this.g = prev;
+    prev.add(group);
+    return group;
   }
   finish(mesh) {
     mesh.castShadow = true;
@@ -55,17 +68,35 @@ function legs(b, w, d, h, leg, inset, m = b.m2) {
   return { lx, lz };
 }
 
+// Фасады: handle 'v' — распашные дверцы, 'h' — выдвижные ящики.
 function fronts(b, w, h, d, cols, rows, y0, zc, handle = 'h') {
   const cw = w / cols, rh = h / rows;
   for (let i = 0; i < cols; i++) for (let j = 0; j < rows; j++) {
     const x = -w / 2 + cw * (i + 0.5), y = y0 + rh * j;
-    b.box(cw - 0.006, rh - 0.006, 0.02, x, y + 0.003, zc, b.m3);
-    if (handle === 'h') b.box(Math.min(0.16, cw * 0.4), 0.014, 0.016, x, y + rh * 0.72, zc + 0.016, b.m2);
-    else {
-      const hx = cols === 1 ? x + cw / 2 - 0.05 : x + (i % 2 === 0 ? 1 : -1) * (cw / 2 - 0.05);
-      b.box(0.014, Math.min(0.16, rh * 0.3), 0.016, hx, y + Math.min(rh * 0.5, 1.0), zc + 0.016, b.m2);
+    if (handle === 'h') {
+      b.part(x, y, zc, { kind: 'drawer', z0: zc, travel: Math.max(0.1, (d - 0.08) * 0.75) }, () => {
+        b.box(cw - 0.006, rh - 0.006, 0.02, 0, 0.003, 0, b.m3);
+        b.box(Math.min(0.16, cw * 0.4), 0.014, 0.016, 0, rh * 0.72, 0.016, b.m2);
+        const dd = Math.max(0.05, d - 0.1), bw = cw - 0.05, bh = Math.max(0.02, rh - 0.06);
+        b.box(bw, 0.01, dd, 0, 0.02, -dd / 2 - 0.01, b.m2);
+        for (const s of [-1, 1]) b.box(0.012, bh, dd, s * (bw / 2 - 0.006), 0.03, -dd / 2 - 0.01, b.m2);
+        b.box(bw - 0.024, bh, 0.012, 0, 0.03, -dd - 0.004, b.m2);
+      });
+    } else {
+      const left = cols === 1 || i % 2 === 0, k = left ? 1 : -1, half = cw / 2 - 0.003;
+      b.part(x - k * half, y, zc, { kind: 'door', sign: -k }, () => {
+        b.box(cw - 0.006, rh - 0.006, 0.02, k * half, 0.003, 0, b.m3);
+        b.box(0.014, Math.min(0.16, rh * 0.3), 0.016, k * (2 * half - 0.05), Math.min(rh * 0.5, 1.0), 0.016, b.m2);
+      });
     }
   }
+}
+
+export function applyAct(part, t) {
+  const a = part.userData.act;
+  part.userData.t = t;
+  if (a.kind === 'door') part.rotation.y = a.sign * t * 1.9;
+  else part.position.z = a.z0 + t * a.travel;
 }
 
 function sofa(b, w, d, h) {
@@ -102,10 +133,15 @@ const BUILD = {
   fridge(b, w, d, h) {
     b.box(w, h, d - 0.03, 0, 0, -0.015);
     const split = h * 0.62;
-    b.box(w - 0.006, split - 0.012, 0.03, 0, 0.006, d / 2 - 0.015, b.m3);
-    b.box(w - 0.006, h - split - 0.012, 0.03, 0, split + 0.006, d / 2 - 0.015, b.m3);
-    b.box(0.016, 0.3, 0.02, -w / 2 + 0.05, split - 0.4, d / 2 + 0.01, b.m2);
-    b.box(0.016, 0.2, 0.02, -w / 2 + 0.05, split + 0.08, d / 2 + 0.01, b.m2);
+    const hx = w / 2 - 0.003;          // петли справа, ручки слева
+    b.part(hx, 0, d / 2 - 0.015, { kind: 'door', sign: 1 }, () => {
+      b.box(w - 0.006, split - 0.012, 0.03, -hx, 0.006, 0, b.m3);
+      b.box(0.016, 0.3, 0.02, -2 * hx + 0.05, split - 0.4, 0.025, b.m2);
+    });
+    b.part(hx, split, d / 2 - 0.015, { kind: 'door', sign: 1 }, () => {
+      b.box(w - 0.006, h - split - 0.012, 0.03, -hx, 0.006, 0, b.m3);
+      b.box(0.016, 0.2, 0.02, -2 * hx + 0.05, 0.08, 0.025, b.m2);
+    });
   },
   shelf(b, w, d, h) {
     const t = 0.02;
@@ -182,8 +218,11 @@ const BUILD = {
   door(b, w, d, h) {
     for (const s of [-1, 1]) b.box(0.05, h, d, s * (w / 2 - 0.025), 0, 0, b.m2);
     b.box(w - 0.1, 0.05, d, 0, h - 0.05, 0, b.m2);
-    b.box(w - 0.1, h - 0.05, 0.04, 0, 0, 0, b.m3);
-    b.box(0.02, 0.12, 0.09, w / 2 - 0.13, 1.0 > h ? h / 2 : 1.0, 0, b.m2);
+    const lw = w - 0.1;
+    b.part(-lw / 2, 0, 0, { kind: 'door', sign: -1 }, () => {
+      b.box(lw, h - 0.05, 0.04, lw / 2, 0, 0, b.m3);
+      b.box(0.02, 0.12, 0.09, lw - 0.08, 1.0 > h ? h / 2 : 1.0, 0, b.m2);
+    });
   },
   window(b, w, d, h) {
     for (const s of [-1, 1]) b.box(0.05, h, d, s * (w / 2 - 0.025), 0, 0);
@@ -228,8 +267,10 @@ export const CATALOG = [
   { type: 'human', name: 'Человек 175 см', w: 0.45, d: 0.28, h: 1.75, color: '#7a8fa3' },
 ];
 
-export function fillBlank(group, type, w, d, h, color) {
+export function fillBlank(group, type, w, d, h, color, open) {
   const b = new Builder(group, color || '#f1eee8');
   (BUILD[type] || BUILD.box)(b, w, d, h);
+  for (const c of group.children)
+    if (c.userData.act) applyAct(c, open && open.includes(c.userData.part) ? 1 : 0);
   return group;
 }
