@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=32';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=33';
 
 const STORE = 'taburetka.project.v1';
 
@@ -1037,15 +1037,18 @@ function clearGroup(g) {
   }
 }
 // Конец размера может быть привязан к предмету: at = { id, l } — точка в долях его габарита.
-function attachOf(p, id) {
+function attachOf(p, id, n) {
   const it = id && item(id);
   if (!it) return undefined;
   const c = Math.cos(it.rot), s = Math.sin(it.rot), dx = p.x - it.x, dz = p.z - it.z, r4 = (v) => Math.round(v * 1e4) / 1e4;
-  return { id, l: [r4((c * dx - s * dz) / it.w), r4((p.y - it.y) / it.h), r4((s * dx + c * dz) / it.d)] };
+  const at = { id, l: [r4((c * dx - s * dz) / it.w), r4((p.y - it.y) / it.h), r4((s * dx + c * dz) / it.d)] };
+  if (n >= 0) { at.n = n; at.c = itemPoints(it).length; }   // номер настоящего угла детали: размер держится за него
+  return at;
 }
 function dimEnd(m, k) {
   const at = m[k + 'i'], it = at && item(at.id);
   if (!it) return new THREE.Vector3(...m[k]);
+  if (at.n >= 0) { const pts = itemPoints(it); if (pts.length === at.c && pts[at.n]) return pts[at.n].clone(); }
   const c = Math.cos(it.rot), s = Math.sin(it.rot), lx = at.l[0] * it.w, lz = at.l[2] * it.d;
   return new THREE.Vector3(it.x + c * lx + s * lz, it.y + at.l[1] * it.h, it.z - s * lx + c * lz);
 }
@@ -1148,7 +1151,7 @@ function nearest(points, lim) {
 const ptCache = new Map();
 function itemPoints(it) {                // углы габарита + настоящие углы деталей болванки
   const g = objs.get(it.id);
-  const key = [it.x, it.y, it.z, it.rot, it.w, it.d, it.h, it.type, g?.children.length, (it.open || []).join('.')].join();
+  const key = [it.x, it.y, it.z, it.rot, it.w, it.d, it.h, it.type, g?.children.length, (it.open || []).join('.'), it.pose].join();
   const c = ptCache.get(it.id);
   if (c && c.key === key) return c.pts;
   const pts = [];
@@ -1174,7 +1177,7 @@ function measurePoint() {
   roomMesh().v.forEach((q) => corners.push(new THREE.Vector3(...q)));
   for (const m of state.dims) corners.push(dimEnd(m, 'a'), dimEnd(m, 'b'));
   const c = nearest(corners, lim);
-  if (c) return { p: c.clone(), kind: 'corner', id: c.itemId };
+  if (c) return { p: c.clone(), kind: 'corner', id: c.itemId, n: c.itemId ? itemPoints(item(c.itemId)).indexOf(c) : -1 };
   const pk = pickItem();
   if (pk) return { p: world.worldToLocal(pk.point), kind: 'free', id: pk.id };
   const p = hitPlaneY(localRay(ray.ray), 0);
@@ -1383,7 +1386,7 @@ function measureTap() {
   const m = measurePoint();
   if (!m) return;
   showSnap(m);
-  const end = { p: m.p.clone(), at: attachOf(m.p, m.id) };
+  const end = { p: m.p.clone(), at: attachOf(m.p, m.id, m.n) };
   if (!measureA) measureA = end;
   else {
     const dim = { a: measureA.p.toArray().map(r3), b: end.p.toArray().map(r3) };
