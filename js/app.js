@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=39';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=40';
 
 const STORE = 'taburetka.project.v1';
 
@@ -991,6 +991,7 @@ function viewHeightAt(obj) {
   obj.getWorldPosition(_v); c.getWorldPosition(_c);
   return (_v.distanceTo(_c) * 2 * Math.tan(THREE.MathUtils.degToRad(c.fov / 2))) / ws;
 }
+const _pa = new THREE.Vector2(), _pb = new THREE.Vector2(), _pc = new THREE.Vector2(), _q = new THREE.Quaternion(), _zAxis = new THREE.Vector3(0, 0, 1), _winv = new THREE.Matrix4();
 function updateConstSize() {
   for (const h of handles) if (h.userData.cs) h.scale.setScalar(h.userData.cs * viewHeightAt(h));
   for (const a of arrows) a.scale.setScalar((coarse ? 0.16 : 0.12) * viewHeightAt(a));
@@ -1000,6 +1001,7 @@ function updateConstSize() {
   // в шлеме — постоянный настоящий размер, строго вертикально, поворачиваются к зрителю только вокруг вертикали.
   const inXR = renderer.xr.isPresenting, c = inXR ? camera : cam();
   world.updateMatrixWorld(true);
+  _winv.copy(world.matrixWorld).invert();
   const cl = world.worldToLocal(c.getWorldPosition(new THREE.Vector3()));
   for (const g of [dimsG, tmpG]) for (const o of g.children) {
     if (o.userData.bar) { const t = inXR ? 0.004 : 0.0022 * viewHeightAt(o); o.scale.set(t, o.userData.len, t); continue; }
@@ -1007,8 +1009,32 @@ function updateConstSize() {
     if (!o.userData.label) continue;
     const s = inXR ? 0.055 : 0.034 * viewHeightAt(o);
     o.scale.set(s * o.userData.aspect, s, 1);
-    if (inXR) o.rotation.set(0, Math.atan2(cl.x - o.position.x, cl.z - o.position.z), 0);
-    else o.quaternion.copy(c.quaternion);
+    if (inXR) { o.rotation.set(0, Math.atan2(cl.x - o.position.x, cl.z - o.position.z), 0); continue; }
+    o.quaternion.copy(c.quaternion);
+    const A = o.userData.a, B = o.userData.b;
+    if (!A || !B) continue;
+    // На экране: табличка повёрнута вдоль линии размера и уходит по ней в сторону, если закрывает ручку гамбола.
+    const W = canvas.clientWidth / 2, Hh = canvas.clientHeight / 2;
+    const px = (p, out) => { _v.copy(p).applyMatrix4(world.matrixWorld).project(c); out.set(_v.x * W, _v.y * Hh); return Math.abs(_v.z) <= 1; };
+    if (!px(A, _pa) || !px(B, _pb)) { o.position.copy(A).add(B).multiplyScalar(0.5); continue; }
+    let ang = Math.atan2(_pb.y - _pa.y, _pb.x - _pa.x);
+    if (ang > Math.PI / 2 + 1e-3) ang -= Math.PI; else if (ang <= -Math.PI / 2 + 1e-3) ang += Math.PI;   // текст читается слева направо или снизу вверх
+    o.quaternion.multiply(_q.setFromAxisAngle(_zAxis, ang));
+    let best = 0.5;
+    if (handles.length && tool !== 'room') {
+      const lim = 0.034 * Hh * o.userData.aspect + 16;
+      if (!o.userData.hp || o.userData.hp.length !== handles.length) o.userData.hp = handles.map(() => new THREE.Vector2());
+      const ok = handles.map((h, i) => px(h.getWorldPosition(_c).applyMatrix4(_winv), o.userData.hp[i]));
+      let far = -1;
+      for (const t of [0.5, 0.36, 0.64, 0.24, 0.76]) {
+        _pc.copy(_pa).lerp(_pb, t);
+        let near = Infinity;
+        o.userData.hp.forEach((q, i) => { if (ok[i]) near = Math.min(near, q.distanceTo(_pc)); });
+        if (near > lim) { best = t; break; }
+        if (near > far) { far = near; best = t; }
+      }
+    }
+    o.position.copy(A).lerp(B, best);
   }
 }
 function pickHandle() {
@@ -1028,16 +1054,16 @@ const BAR_GEO = new THREE.CylinderGeometry(1, 1, 1, 8), DOT_GEO = new THREE.Sphe
 let measureA = null;
 const LABEL_GEO = new THREE.PlaneGeometry(1, 1);
 function makeLabel(text) {
-  const c = document.createElement('canvas'), x = c.getContext('2d'), font = '38px "PT Mono", ui-monospace, monospace';
+  const c = document.createElement('canvas'), x = c.getContext('2d'), font = 'bold 40px "PT Mono", ui-monospace, monospace';
   x.font = font;
   c.width = Math.ceil(x.measureText(text).width) + 32;
   c.height = 64;
   x.font = font;
   x.fillStyle = '#F3EAD4';
   x.beginPath();
-  x.rect(2, 2, c.width - 4, 60);
+  x.rect(3, 3, c.width - 6, 58);
   x.fill();
-  x.strokeStyle = '#1b1a18'; x.lineWidth = 4; x.stroke();
+  x.strokeStyle = '#A61E1E'; x.lineWidth = 6; x.stroke();
   x.fillStyle = '#1d1d1b'; x.textAlign = 'center'; x.textBaseline = 'middle';
   x.fillText(text, c.width / 2, 34);
   const tex = new THREE.CanvasTexture(c);
@@ -1065,8 +1091,9 @@ function dimObjects(group, a, b) {       // жирная линия размер
     dot.raycast = () => {};
     group.add(dot);
   }
-  const lab = makeLabel(fmt(len));
+  const lab = makeLabel(fmt(len).replace(' см', ''));   // табличка лежит вдоль линии, прямо на ней
   lab.position.copy(a).add(b).multiplyScalar(0.5);
+  lab.userData.a = a.clone(); lab.userData.b = b.clone();
   group.add(lab);
 }
 function clearGroup(g) {
