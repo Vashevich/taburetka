@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=44';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=45';
 
 const STORE = 'taburetka.project.v1';
 
@@ -992,6 +992,12 @@ function addGumball(it) {
     put(sb, new THREE.BoxGeometry(0.1, 0.1, 0.1).translate(0, -0.62, 0), 13);
     grip(sb, [0, -0.62, 0], { kind: 'scale', axis, sign: -1 });
   }
+  const hub = part(0xf3ead4, 0, 0);                         // шарик в центре: обычное перетаскивание с магнитом
+  put(hub, new THREE.SphereGeometry(0.085, 18, 12), 14);
+  const rim = new THREE.Mesh(new THREE.SphereGeometry(0.105, 18, 12), new THREE.MeshBasicMaterial({ color: 0x1b1a18, side: THREE.BackSide, depthTest: false, transparent: true }));
+  rim.renderOrder = 13;
+  hub.add(rim);
+  grip(hub, [0, 0, 0], { kind: 'grab' });
   const arc = part(HCOL.y, 0, 0);                           // дуга между красной и зелёной стрелкой: поворот
   put(arc, new THREE.TorusGeometry(0.72, 0.02, 8, 28, Math.PI / 2).rotateX(Math.PI / 2));
   for (const a of [16, 24, 32, 40, 48, 56, 64, 72]) { const r = THREE.MathUtils.degToRad(a); grip(arc, [0.72 * Math.cos(r), 0, 0.72 * Math.sin(r)], { kind: 'rot' }); }
@@ -1295,7 +1301,7 @@ function onDown(e) {
   if (tool === 'measure' || tool === 'act' || tool === 'erase') return;
   setRay(e);
   const d = beginDrag(localRay(ray.ray), e.pointerType === 'mouse');
-  if (d) { if (d.mode !== 'move') down.noTap = true; startDrag(d, e); }
+  if (d) { if (d.mode !== 'move' || d.handle) down.noTap = true; startDrag(d, e); }
 }
 // Начало перетаскивания лучом ray (мышь, палец или контроллер). direct — можно тащить невыделенный предмет.
 function beginDrag(lr, direct) {
@@ -1325,6 +1331,8 @@ function beginDrag(lr, direct) {
       const dir = u.axis === 'x' ? new THREE.Vector3(c, 0, -sn) : u.axis === 'z' ? new THREE.Vector3(sn, 0, c) : AXES.y.clone();
       return { mode: 'axis', id: it.id, axis: u.axis, dir, a0, s0: axisParam(lr, a0, dir), x0: it.x, y0: it.y, z0: it.z };
     }
+    if (u && u.kind === 'grab')
+      return { mode: 'move', handle: true, ...makeGrab(it, new THREE.Vector3(it.x, it.y + it.h / 2, it.z), false) };
     if (u && u.kind === 'rot') {
       const py = it.y + it.h / 2, p = hitPlaneY(lr, py);
       if (p) return { mode: 'rotate', id: it.id, py, a0: Math.atan2(p.x - it.x, p.z - it.z), rot0: it.rot };
