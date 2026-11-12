@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=28';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=29';
 
 const STORE = 'taburetka.project.v1';
 
@@ -905,11 +905,16 @@ function updateGizmo() {
   if (tool === 'pull' && !it.lock) {
     for (const [axis, sign, x, y, z] of [['x', 1, it.w / 2, it.h / 2, 0], ['x', -1, -it.w / 2, it.h / 2, 0],
       ['z', 1, 0, it.h / 2, it.d / 2], ['z', -1, 0, it.h / 2, -it.d / 2], ['y', 1, 0, it.h, 0]]) {
-      const hm = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12),
-        new THREE.MeshBasicMaterial({ color: HCOL[axis], depthTest: false, transparent: true }));
+      // двусторонняя стрелка вдоль оси: видно, куда тянуть
+      const mat = new THREE.MeshBasicMaterial({ color: HCOL[axis], depthTest: false, transparent: true });
+      const hm = new THREE.Group();
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 2.2, 10), mat);
+      const tipA = new THREE.Mesh(new THREE.ConeGeometry(0.85, 1.5, 14).translate(0, 1.85, 0), mat);
+      const tipB = new THREE.Mesh(new THREE.ConeGeometry(0.85, 1.5, 14).rotateX(Math.PI).translate(0, -1.85, 0), mat);
+      for (const q of [shaft, tipA, tipB]) { q.renderOrder = 11; hm.add(q); }
+      if (axis === 'x') hm.rotation.z = Math.PI / 2; else if (axis === 'z') hm.rotation.x = Math.PI / 2;
       hm.position.set(x, y, z);
-      hm.renderOrder = 11;
-      hm.userData = { axis, sign, cs: coarse ? 0.02 : 0.012, mat: hm.material, col: HCOL[axis] };
+      hm.userData = { axis, sign, cs: coarse ? 0.016 : 0.01, mat, col: HCOL[axis], pr: 2 };
       gizmo.add(hm);
       handles.push(hm);
     }
@@ -1488,7 +1493,7 @@ const HINTS = {
   act: 'Нажимайте на дверцы и ящики — они открываются и закрываются',
   move3d: 'Тащите стрелку: красная и зелёная — вдоль пола, синяя — вверх-вниз',
   rotate: 'Выберите предмет и тащите вокруг него — поворот с шагом 15°',
-  pull: 'Выберите предмет и тащите цветные шарики на гранях',
+  pull: 'Выберите предмет и тащите двусторонние стрелки на его гранях',
   measure: 'Рулетка: укажите первую точку — липнет к углам',
 };
 function updateStatus() {
