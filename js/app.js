@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS } from './furniture.js?v=50';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS } from './furniture.js?v=51';
 
 const STORE = 'taburetka.project.v1';
 
@@ -1438,6 +1438,10 @@ function showCut(c) {                   // красная точка под ку
 }
 function cancelCut() { cutA = null; showCut(null); }
 function tapCut() {                     // нажатие в «Комнате» мимо ручек: первая точка, вторая точка — разрез
+  if (!cutA) {                          // нажали на мебель — выходим из «Комнаты» в «Выбор» с этим предметом
+    const pk = pickItem();
+    if (pk) { setTool('select'); select(pk.id); return; }
+  }
   const c = findCut();
   if (!c) {                             // мимо рёбер: начатый разрез отменяем, иначе выделяем грань под курсором
     if (cutA) { cancelCut(); return; }
@@ -1658,8 +1662,25 @@ function updateStatus() {
   else if (it) s = `${it.name} — ${fmt(it.w)} × ${fmt(it.d)} × ${fmt(it.h)}`.replace(/ см(?= ×)/g, '');
   $('#status').textContent = s;
 }
+// Курсор показывает, какой инструмент в руке: значок инструмента и точная точка нажатия.
+let CURSORS = null;
+const makeCursors = () => {
+  const svg = (body, hx, hy) => `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 36 36' fill='none' stroke-linecap='round' stroke-linejoin='round'>${body}</svg>`)}") ${hx} ${hy}, auto`;
+  const two = (d, tr, fill = 'none') => `<path d='${d}' transform='${tr}' stroke='#F6EEDB' stroke-width='4.5'/><path d='${d}' transform='${tr}' stroke='#1b1a18' stroke-width='1.7' fill='${fill}'/>`;
+  const cross = two('M7 1v12M1 7h12', '');
+  const icon = (id) => TOOLS.find((q) => q[0] === id)[2];
+  return {
+    select: svg(two('M5 3l14 8-6 2-2 6z', 'translate(6 6) scale(1.15)', '#F6EEDB') + two('M11.5 2v4M3 9.5h4M5 3.5l2.6 2.6', ''), 12, 9),
+    measure: svg(cross + two(icon('measure'), 'translate(13 13) scale(0.9)', '#F6EEDB'), 7, 7),
+    erase: svg(two(icon('erase'), 'translate(2 2) scale(1.3)', '#F6EEDB'), 11, 28),
+    act: svg(two(icon('act'), 'translate(2 1) scale(1.35)', '#F6EEDB'), 16, 6),
+    room: svg(cross + two(icon('room'), 'translate(13 13) scale(0.9)', '#F6EEDB'), 7, 7),
+  };
+};
 function setTool(t) {
   tool = t;
+  CURSORS = CURSORS || makeCursors();
+  canvas.style.cursor = CURSORS[t] || 'auto';
   measureA = null;
   clearGroup(tmpG);
   showSnap(null);
