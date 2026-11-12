@@ -810,7 +810,7 @@ const HINTS = {
 function updateStatus() {
   const it = sel();
   let s = HINTS[tool];
-  if (tool === 'measure' && measureA) s = 'Рулетка: укажите вторую точку';
+  if (tool === 'measure') s = measureA ? 'Рулетка: укажите вторую точку' : HINTS.measure;
   else if (it) s = `${it.name} — ${fmt(it.w)} × ${fmt(it.d)} × ${fmt(it.h)}`.replace(/ см(?= ×)/g, '');
   $('#status').textContent = s;
 }
