@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, fillBlank, applyAct, EDGE } from './furniture.js?v=7';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=8';
 
 const STORE = 'taburetka.project.v1';
 
@@ -384,7 +384,7 @@ const snapRot = (a) => { const s = Math.PI / 12; return state.snap > 0 ? Math.ro
 function spawnXZ() {
   if (renderer.xr.isPresenting) {
     let p = null;
-    if (xr.mode === 'ar' && xr.aim) p = xr.aim.clone();
+    if (xr.mode === 'ar' && xr.aim && !ctrls.some((c) => c.userData.src?.targetRayMode === 'tracked-pointer')) p = xr.aim.clone();
     else if (!xr.mini) {
       const h = camera.getWorldPosition(new THREE.Vector3()), f = camera.getWorldDirection(new THREE.Vector3());
       f.y = 0;
@@ -527,7 +527,16 @@ function select(id) {
   selId = id && item(id) ? id : null;
   updateGizmo(); updateProps(); updateStatus(); updateXRHint();
 }
+let hot = null;                         // ручка под курсором / лучом
+function setHot(h) {
+  const t = h ? h.userData.arrow || h : null;
+  if (t === hot) return;
+  if (hot && hot.userData.mat) hot.userData.mat.color.set(hot.userData.col);
+  hot = t;
+  if (hot && hot.userData.mat) hot.userData.mat.color.set(0xffc400);
+}
 function updateGizmo() {
+  hot = null;
   for (const c of [...gizmo.children]) {
     gizmo.remove(c);
     c.traverse((o) => { o.geometry?.dispose(); if (o.material && o.material !== SEL) o.material.dispose(); });
@@ -549,7 +558,7 @@ function updateGizmo() {
         new THREE.MeshBasicMaterial({ color: HCOL[axis], depthTest: false, transparent: true }));
       hm.position.set(x, y, z);
       hm.renderOrder = 11;
-      hm.userData = { axis, sign, cs: coarse ? 0.02 : 0.012 };
+      hm.userData = { axis, sign, cs: coarse ? 0.02 : 0.012, mat: hm.material, col: HCOL[axis] };
       gizmo.add(hm);
       handles.push(hm);
     }
@@ -562,6 +571,7 @@ function updateGizmo() {
     for (const [axis, rx, rz] of [['x', 0, -Math.PI / 2], ['y', 0, 0], ['z', Math.PI / 2, 0]]) {
       const a = new THREE.Group(), m = new THREE.MeshBasicMaterial({ color: HCOL[axis], depthTest: false, transparent: true });
       a.rotation.set(rx, 0, rz);
+      a.userData = { mat: m, col: HCOL[axis] };
       const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 1, 8).translate(0, 0.5, 0), m);
       const cone = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.24, 16).translate(0, 1.1, 0), m);
       shaft.renderOrder = cone.renderOrder = 11;
@@ -600,8 +610,8 @@ function viewHeightAt(obj) {
   return (_v.distanceTo(_c) * 2 * Math.tan(THREE.MathUtils.degToRad(c.fov / 2))) / ws;
 }
 function updateConstSize() {
-  for (const h of handles) if (h.userData.cs) h.scale.setScalar(h.userData.cs * viewHeightAt(h));
-  for (const a of arrows) a.scale.setScalar((coarse ? 0.16 : 0.12) * viewHeightAt(a));
+  for (const h of handles) if (h.userData.cs) h.scale.setScalar(h.userData.cs * viewHeightAt(h) * (h === hot ? 1.5 : 1));
+  for (const a of arrows) a.scale.setScalar((coarse ? 0.16 : 0.12) * viewHeightAt(a) * (a === hot ? 1.25 : 1));
   if (snapMarker.visible) snapMarker.scale.setScalar((snapMarker.userData.cs || 0.01) * viewHeightAt(snapMarker));
   for (const g of [dimsG, tmpG]) for (const o of g.children) {
     if (!o.userData.label) continue;
@@ -942,6 +952,7 @@ function onMove(e) {
     if (updateDrag(drag, localRay(ray.ray))) updateStatus();
     return;
   }
+  if ((tool === 'pull' || tool === 'move3d') && e.pointerType === 'mouse' && !down) { setRay(e); setHot(pickHandle()); }
   if (tool === 'erase' && e.pointerType === 'mouse' && !(down && down.moved)) { setRay(e); showErase(eraseTarget()); }
   if (tool === 'measure' && e.pointerType === 'mouse' && !(down && down.moved)) {
     setRay(e);
@@ -1100,21 +1111,56 @@ $('#btnAdd').onclick = () => toggleCatalog();
 $('#catClose').onclick = () => toggleCatalog(false);
 function afterAdd() { if (innerWidth <= 640 || renderer.xr.isPresenting) toggleCatalog(false); }
 let blankThumbs = {};
+let catSel = 'all', pull = null;         // pull — карточка, которую тащат из каталога в комнату
 function buildCatalog() {
   const thumbs = blankThumbs = makeThumbs();
-  const grid = $('#tabBlanks');
+  const grid = $('#tabBlanks'), chips = $('#catCats');
+  const filter = () => {
+    for (const c of chips.children) c.classList.toggle('on', c.dataset.cat === catSel);
+    for (const b of grid.children) b.hidden = catSel !== 'all' && b.dataset.cat !== catSel;
+  };
+  for (const [id, label] of CATS) {
+    const c = document.createElement('button');
+    c.textContent = label;
+    c.dataset.cat = id;
+    c.onclick = () => { catSel = id; filter(); };
+    chips.append(c);
+  }
   for (const def of CATALOG) {
     const b = document.createElement('button');
-    if (thumbs[def.type]) { const img = new Image(); img.src = thumbs[def.type]; img.alt = ''; b.append(img); }
+    b.dataset.cat = def.cat;
+    if (thumbs[def.type]) { const img = new Image(); img.src = thumbs[def.type]; img.alt = ''; img.draggable = false; b.append(img); }
     const name = document.createElement('span');
     name.textContent = def.name;
     const dim = document.createElement('small');
     dim.textContent = `${cm(def.w)}×${cm(def.d)}×${cm(def.h)}`;
     b.append(name, dim);
-    b.onclick = () => { addBlank(def); afterAdd(); };
+    b.onclick = () => { if (pull?.used) return; addBlank(def); afterAdd(); };
+    b.addEventListener('pointerdown', (e) => { if (e.button === 0) pull = { def, pid: e.pointerId, x: e.clientX, y: e.clientY, g: null, used: false }; });
     grid.append(b);
   }
+  filter();
 }
+// Нажали на карточку и потащили за пределы каталога — предмет едет за курсором в комнату.
+addEventListener('pointermove', (e) => {
+  if (!pull || e.pointerId !== pull.pid || renderer.xr.isPresenting) return;
+  if (!pull.g) {
+    if (Math.hypot(e.clientX - pull.x, e.clientY - pull.y) < 14 || catalogEl.contains(document.elementFromPoint(e.clientX, e.clientY))) return;
+    const it = addBlank(pull.def);
+    pull.g = { mode: 'move', ...makeGrab(it, new THREE.Vector3(it.x, it.y, it.z)) };
+    pull.used = true;
+  }
+  setRay(e);
+  if (updateDrag(pull.g, localRay(ray.ray))) updateStatus();
+});
+const endPull = (e) => {
+  if (!pull || e.pointerId !== pull.pid) return;
+  const p = pull;
+  if (p.g) { if (p.g.changed) { commit(); updateProps(); } afterAdd(); }
+  setTimeout(() => { if (pull === p) pull = null; }, 0);   // после возможного click по карточке
+};
+addEventListener('pointerup', endPull);
+addEventListener('pointercancel', endPull);
 function makeThumbs() {
   const out = {};
   try {
@@ -1236,7 +1282,7 @@ addEventListener('keydown', (e) => {
 });
 
 // ───────────────────────── WebXR: VR и AR ─────────────────────────
-const xr = { next: null, session: null, mode: null, anchored: true, mini: false, hit: null, aim: null, saved: null, refType: 'local-floor' };
+const xr = { kind: null, env: false, next: null, session: null, mode: null, anchored: true, mini: false, hit: null, aim: null, saved: null, refType: 'local-floor' };
 const xray = new THREE.Raycaster();
 const reticle = new THREE.Mesh(new THREE.RingGeometry(0.09, 0.115, 40).rotateX(-Math.PI / 2),
   new THREE.MeshBasicMaterial({ color: 0xa61e1e, depthTest: false, transparent: true }));
@@ -1261,7 +1307,7 @@ const TOOLS = [
 ];
 const VW = 720, VH = 1110, FONT = '"Oswald", "PT Sans", system-ui, sans-serif';
 const INK = '#1b1a18', RED = '#A61E1E', CREAM = '#F6EEDB';
-const vm = { mesh: null, ctx: null, tex: null, regions: [], hover: null, dirty: true, tab: 'blanks', page: 0, imgs: new Map() };
+const vm = { cat: 'all', mesh: null, ctx: null, tex: null, regions: [], hover: null, dirty: true, tab: 'blanks', page: 0, imgs: new Map() };
 function vmImg(url) {
   if (!url) return null;
   let im = vm.imgs.get(url);
@@ -1330,18 +1376,27 @@ function vmDraw() {
   x.fillText('ТАБУРЕТКА', 70, 45);
   btn(222, 16, 56, 56, 'undo', '↶', { font: 28, off: !undoStack.length });
   btn(284, 16, 56, 56, 'redo', '↷', { font: 28, off: !redoStack.length });
-  btn(356, 16, 76, 56, 'mode:vr', 'VR', { bold: true, on: xr.mode === 'vr' });
-  btn(438, 16, 76, 56, 'mode:ar', 'AR', { bold: true, on: xr.mode === 'ar' });
-  btn(530, 16, 110, 56, 'mini', 'Макет', { on: xr.mini });
+  btn(352, 16, 168, 56, 'env', 'Окружение', { on: xr.env, off: xr.mode !== 'ar', font: 20 });
+  btn(528, 16, 112, 56, 'mini', 'Макет', { on: xr.mini, font: 20 });
   btn(648, 16, 56, 56, 'exit', '✕', { fg: RED });
 
   // каталог болванок
   card(1, 102, VW - 2, 846, '#EBDFC3');
-  const list = CATALOG.map((d) => ({ act: 'add:' + d.type, name: d.name, sub: `${cm(d.w)}×${cm(d.d)}×${cm(d.h)}`, img: blankThumbs[d.type] }));
-  const per = 12, pages = Math.max(1, Math.ceil(list.length / per));
+  let chx = 20, chy = 116;
+  x.font = `600 18px ${FONT}`;
+  for (const [id, label] of CATS) {
+    const w = Math.ceil(x.measureText(label.toUpperCase()).width) + 28;
+    if (chx + w > VW - 20) { chx = 20; chy += 50; }
+    btn(chx, chy, w, 42, 'cat:' + id, label, { on: vm.cat === id, font: 18 });
+    chx += w + 8;
+  }
+  const y0 = chy + 58;
+  const list = CATALOG.filter((d) => vm.cat === 'all' || d.cat === vm.cat)
+    .map((d) => ({ act: 'add:' + d.type, name: d.name, sub: `${cm(d.w)}×${cm(d.d)}×${cm(d.h)}`, img: blankThumbs[d.type] }));
+  const rows = Math.max(1, Math.floor((874 - y0) / 190)), per = rows * 3, pages = Math.max(1, Math.ceil(list.length / per));
   vm.page = clamp(vm.page, 0, pages - 1);
   list.slice(vm.page * per, vm.page * per + per).forEach((t, i) => {
-    const tx = 20 + (i % 3) * 230, ty = 118 + Math.floor(i / 3) * 190;
+    const tx = 20 + (i % 3) * 230, ty = y0 + Math.floor(i / 3) * 190;
     btn(tx, ty, 220, 180, t.act, '', {});
     const im = vmImg(t.img);
     if (im) x.drawImage(im, tx + 39, ty + 6, 142, 106);
@@ -1367,51 +1422,80 @@ function drawTool(x, btn, icon, id, label, path, bx, by, w, h, hot = tool === id
   x.fillStyle = hot ? CREAM : INK; x.font = `600 15px ${FONT}`; x.textAlign = 'center'; x.textBaseline = 'middle';
   x.fillText(label.toUpperCase(), bx + w / 2, by + h - 26);
 }
-// Кольцо инструментов: держим B на правом контроллере, наводим луч, отпускаем — инструмент выбран.
+// Панель инструментов на B: держим кнопку на правом контроллере — перед лучом появляются карточки,
+// наводим луч на нужную и отпускаем.
 const tw = { mesh: null, ctx: null, tex: null, hover: -1, by: null };
-const TWC = 120, TWH = 150;
+const TW_COLS = 4, TW_CELL = 170, TW_PAD = 16, TW_HEAD = 58, TW_M = 0.3 / 712;   // метров на пиксель
+const twRows = () => Math.ceil(TOOLS.length / TW_COLS);
+const twW = () => TW_COLS * TW_CELL + 2 * TW_PAD, twH = () => twRows() * TW_CELL + 2 * TW_PAD + TW_HEAD;
 function twDraw() {
-  const x = tw.ctx, n = TOOLS.length;
-  x.clearRect(0, 0, TWC * n, TWH);
+  const x = tw.ctx, W = twW(), H = twH();
+  x.clearRect(0, 0, W, H);
+  x.fillStyle = '#EBDFC3'; x.fillRect(2, 2, W - 4, H - 4);
+  x.strokeStyle = INK; x.lineWidth = 4; x.strokeRect(2, 2, W - 4, H - 4);
+  x.fillStyle = INK; x.font = `700 22px ${FONT}`; x.textAlign = 'left'; x.textBaseline = 'middle';
+  x.fillText('ИНСТРУМЕНТЫ', TW_PAD + 6, TW_PAD + 22);
+  x.font = 'italic 17px "PT Serif", Georgia, serif'; x.fillStyle = '#5a5147'; x.textAlign = 'right';
+  x.fillText('наведите луч и отпустите B', W - TW_PAD - 6, TW_PAD + 23);
   const icon = (path, ix, iy, sc, color) => {
     x.save(); x.translate(ix, iy); x.scale(sc, sc);
     x.strokeStyle = color; x.lineWidth = 1.8; x.lineCap = 'round'; x.lineJoin = 'round';
     x.stroke(new Path2D(path)); x.restore();
   };
   TOOLS.forEach(([id, label, path], i) => {
-    const hot = tw.hover === i;
-    x.fillStyle = hot ? RED : tool === id ? INK : '#F3EAD4';
-    x.fillRect(i * TWC + 3, 3, TWC - 6, TWH - 6);
-    x.strokeStyle = INK; x.lineWidth = 4; x.strokeRect(i * TWC + 3, 3, TWC - 6, TWH - 6);
-    drawTool(x, null, icon, id, label, path, i * TWC + 3, 12, TWC - 6, TWH - 16, hot || tool === id);
+    const cx = TW_PAD + (i % TW_COLS) * TW_CELL + 5, cy = TW_PAD + TW_HEAD + Math.floor(i / TW_COLS) * TW_CELL + 5, s = TW_CELL - 10;
+    const hot = tw.hover === i, cur = tool === id;
+    x.fillStyle = hot ? RED : cur ? INK : '#F3EAD4';
+    x.fillRect(cx, cy, s, s);
+    x.strokeStyle = INK; x.lineWidth = hot ? 5 : 2; x.strokeRect(cx, cy, s, s);
+    const col = hot || cur ? CREAM : INK;
+    icon(path, cx + s / 2 - 36, cy + 22, 3, col);
+    x.fillStyle = col; x.font = `600 19px ${FONT}`; x.textAlign = 'center';
+    x.fillText(label.toUpperCase(), cx + s / 2, cy + s - 28);
   });
   tw.tex.needsUpdate = true;
 }
-function twOpen(c) {
-  const n = TOOLS.length;
+function twEnsure() {
   if (!tw.mesh) {
     const cv = document.createElement('canvas');
-    cv.width = TWC * n; cv.height = TWH;
+    cv.width = twW(); cv.height = twH();
     tw.ctx = cv.getContext('2d');
     tw.tex = new THREE.CanvasTexture(cv);
     tw.tex.colorSpace = THREE.SRGBColorSpace;
-    tw.mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.075 * n, 0.075 * TWH / TWC),
+    tw.tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    tw.mesh = new THREE.Mesh(new THREE.PlaneGeometry(twW() * TW_M, twH() * TW_M),
       new THREE.MeshBasicMaterial({ map: tw.tex, transparent: true, depthTest: false }));
     tw.mesh.renderOrder = 50;
+    tw.mesh.visible = false;
     scene.add(tw.mesh);
   }
+}
+function twOpen(c) {
+  twEnsure();
   const R = ctrlRay(c), idx = Math.max(0, TOOLS.findIndex((t) => t[0] === tool));
-  tw.mesh.position.copy(R.origin).addScaledVector(R.direction, 0.45);
+  // центр карточки текущего инструмента — под лучом
+  const px = TW_PAD + (idx % TW_COLS + 0.5) * TW_CELL - twW() / 2;
+  const py = twH() / 2 - (TW_PAD + TW_HEAD + (Math.floor(idx / TW_COLS) + 0.5) * TW_CELL);
+  tw.mesh.position.copy(R.origin).addScaledVector(R.direction, 0.5);
   tw.mesh.lookAt(R.origin);
-  tw.mesh.translateX(-(idx - (n - 1) / 2) * 0.075);   // текущий инструмент — под лучом
+  tw.mesh.translateX(-px * TW_M);
+  tw.mesh.translateY(-py * TW_M);
   tw.mesh.visible = true;
   tw.by = c; tw.hover = idx;
   twDraw();
 }
+function twHit(R) {
+  if (!tw.mesh || !tw.mesh.visible) return null;
+  xray.ray.copy(R);
+  return xray.intersectObject(tw.mesh, false)[0] || null;
+}
 function twUpdate(c) {
-  xray.ray.copy(ctrlRay(c));
-  const h = xray.intersectObject(tw.mesh, false)[0];
-  const i = h && h.uv ? clamp(Math.floor(h.uv.x * TOOLS.length), 0, TOOLS.length - 1) : -1;
+  const h = twHit(ctrlRay(c));
+  let i = -1;
+  if (h && h.uv) {
+    const col = Math.floor((h.uv.x * twW() - TW_PAD) / TW_CELL), row = Math.floor(((1 - h.uv.y) * twH() - TW_PAD - TW_HEAD) / TW_CELL);
+    if (col >= 0 && col < TW_COLS && row >= 0 && row * TW_COLS + col < TOOLS.length) i = row * TW_COLS + col;
+  }
   if (i !== tw.hover) { tw.hover = i; twDraw(); }
 }
 function twClose() {
@@ -1439,7 +1523,8 @@ function vmAction(act) {
   else if (k === 'redo') redo();
   else if (k === 'mini') setMini(!xr.mini);
   else if (k === 'exit') xr.session?.end();
-  else if (k === 'mode' && v !== xr.mode) { xr.next = v; xr.session?.end(); }
+  else if (k === 'env' && xr.mode === 'ar') { xr.env = !xr.env; updateXRVis(); }
+  else if (k === 'cat') { vm.cat = v; vm.page = 0; }
   vm.dirty = true;
 }
 
@@ -1455,6 +1540,11 @@ function setupControllers() {
     line.visible = false;
     c.userData.line = line;
     c.add(line);
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 10), new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true }));
+    dot.renderOrder = 60;
+    dot.visible = false;
+    c.userData.dot = dot;
+    c.add(dot);
     c.addEventListener('connected', (e) => {
       c.userData.src = e.data;
       const tracked = e.data.targetRayMode === 'tracked-pointer';
@@ -1466,7 +1556,7 @@ function setupControllers() {
       const u = c.userData;
       if (u.grab) u.end = true;
       u.src = null; u.squeeze = false;
-      line.visible = false;
+      line.visible = dot.visible = false;
     });
     c.addEventListener('selectstart', () => { c.userData.start = true; });
     c.addEventListener('selectend', () => { c.userData.end = true; });
@@ -1491,7 +1581,7 @@ function floorPoint(R) {               // пересечение с физиче
 }
 function teleport(c) {
   tpMarker.visible = false;
-  if (xr.mode !== 'vr' || !c.visible) return;
+  if (!xr.env || !c.visible) return;
   const p = floorPoint(ctrlRay(c));
   if (!p) return;
   const h = camera.getWorldPosition(new THREE.Vector3());
@@ -1503,7 +1593,14 @@ function xrSelectStart(c, R) {
   if (xr.mode === 'ar' && !xr.anchored) { if (xr.aim) anchorWorld(xr.aim); return; }
   if (!c.visible) return;
   const reg = vmHit(R);
-  if (reg) { vmAction(reg.act); return; }
+  if (reg) {
+    if (reg.act && reg.act.startsWith('add:')) {   // карточку можно «вытащить» из меню и нести лучом
+      const it = addBlank(CATALOG.find((d) => d.type === reg.act.slice(4)));
+      c.userData.grab = { mode: 'move', ...makeGrab(it, new THREE.Vector3(it.x, it.y, it.z)), fromMenu: true, t0: performance.now() };
+      vm.dirty = true;
+    } else vmAction(reg.act);
+    return;
+  }
   if (tw.by) return;
   ray.ray.copy(R);
   if (tool === 'measure') { measureTap(); return; }
@@ -1516,7 +1613,7 @@ function xrSelectStart(c, R) {
 }
 function xrDrag(c, R) {
   const g = c.userData.grab;
-  if (!c.visible || (g.mode === 'move' && performance.now() - g.t0 < 200)) return;
+  if (!c.visible || (g.fromMenu ? !!vmHit(R) : g.mode === 'move' && performance.now() - g.t0 < 200)) return;
   ray.ray.copy(R);
   updateDrag(g, localRay(R));
 }
@@ -1564,9 +1661,9 @@ function setMini(on) {
 }
 function updateXRVis() {
   if (!floorMesh) return;
-  const ar = xr.mode === 'ar', bare = ar && !xr.mini;
-  ground.visible = !ar && !xr.mini;
-  scene.background = ar ? null : SKY;
+  const ar = xr.mode === 'ar', pass = ar && !xr.env, bare = pass && !xr.mini;   // pass — сквозной режим
+  ground.visible = !pass && !xr.mini;
+  scene.background = pass ? null : SKY;
   floorMesh.visible = gridLines.visible = wallMesh.visible = wallEdges.visible = !bare;
   outline.visible = bare;
   world.visible = !ar || xr.anchored;
@@ -1586,7 +1683,7 @@ function updateXRHint() {
 function sticks(dt) {
   for (const c of ctrls) {
     const u = c.userData, src = u.src, gp = src?.gamepad;
-    if (xr.mode === 'vr' && u.squeeze && c.visible) {
+    if (xr.env && u.squeeze && c.visible) {
       const p = floorPoint(ctrlRay(c));
       tpMarker.visible = !!p;
       if (p) tpMarker.position.copy(p).setY(p.y + 0.01);
@@ -1606,7 +1703,7 @@ function sticks(dt) {
     const x = (Math.abs(ax[2] ?? 0) > Math.abs(ax[0] ?? 0) ? ax[2] : ax[0]) || 0;
     const y = (Math.abs(ax[3] ?? 0) > Math.abs(ax[1] ?? 0) ? ax[3] : ax[1]) || 0;
     if (hand === 'right') {
-      if (xr.mode === 'vr') {
+      if (xr.env) {
         if (Math.abs(x) > 0.6) {
           if (!u.turned) {
             u.turned = true;
@@ -1620,7 +1717,7 @@ function sticks(dt) {
       const f = camera.getWorldDirection(new THREE.Vector3());
       f.y = 0; f.normalize();
       const r = new THREE.Vector3(-f.z, 0, f.x);
-      if (xr.mode === 'vr') rig.position.addScaledVector(f, -y * 1.6 * dt).addScaledVector(r, x * 1.6 * dt);
+      if (xr.env) rig.position.addScaledVector(f, -y * 1.6 * dt).addScaledVector(r, x * 1.6 * dt);
       else world.position.addScaledVector(f, -y * 0.4 * dt).addScaledVector(r, x * 0.4 * dt);
     }
   }
@@ -1629,36 +1726,57 @@ const lastAim = new THREE.Vector3(1e9, 0, 0);
 function xrTick(frame, dt) {
   rig.updateMatrixWorld(true);
   updateAim(frame);
-  let hover = null, aimed = false;
+  let hover = null, aimed = false, hotH = null;
+  const handleDrag = ctrls.some((c) => c.userData.grab && c.userData.grab.mode !== 'move');
   for (const c of ctrls) {
-    const u = c.userData;
-    const R = ctrlRay(c);
+    const u = c.userData, R = ctrlRay(c);
     if (u.start) { u.start = false; xrSelectStart(c, R); }
     if (u.grab) xrDrag(c, R);
-    else if (c.visible && u.src?.targetRayMode === 'tracked-pointer') {
-      const reg = vmHit(R);
-      u.line.scale.z = reg && reg.dist ? reg.dist : 4;
-      if (reg) hover = reg.act || hover;
-      else if (tool === 'erase' && !aimed && !tw.by && u.src.handedness !== 'left') {   // ластик: цель краснеет
-        aimed = true;
+    if (c.visible && u.src?.targetRayMode === 'tracked-pointer') {
+      let dist = null, lineCol = 0x1f6feb;
+      const reg = tw.by ? null : vmHit(R), th = tw.by ? twHit(R) : null;
+      if (reg) { dist = reg.dist; if (!u.grab) hover = reg.act || hover; }
+      else if (th) dist = th.distance;
+      else if (!tw.by) {
         ray.ray.copy(R);
-        const t = eraseTarget();
-        showErase(t);
-        u.line.material.color.set(t ? 0xd11919 : 0x1f6feb);
-      } else if (tool === 'measure' && !aimed && u.src.handedness !== 'left') {   // метка привязки под лучом
-        aimed = true;
-        ray.ray.copy(R);
-        const m = measurePoint();
-        showSnap(m);
-        if (m && m.p.distanceTo(lastAim) > 0.004) {
-          lastAim.copy(m.p);
-          clearGroup(tmpG);
-          if (measureA) dimObjects(tmpG, measureA.p, m.p);
+        const h = u.grab ? null : pickHandle();
+        if (h) { hotH = hotH || h; dist = h.getWorldPosition(_v).distanceTo(R.origin); }
+        else {                          // куда упирается луч: предмет или пол
+          const hit = ray.intersectObjects(itemsG.children, true)[0];
+          if (hit) dist = hit.distance;
+          else { const lr = localRay(R), p = hitPlaneY(lr, 0); if (p) dist = p.distanceTo(lr.o) * (world.scale.x || 1); }
+        }
+        if (!u.grab && !aimed && u.src.handedness !== 'left') {
+          if (tool === 'erase') {       // ластик: цель краснеет
+            aimed = true;
+            const t = eraseTarget();
+            showErase(t);
+            if (t) lineCol = 0xd11919;
+          } else if (tool === 'measure') {   // метка привязки под лучом
+            aimed = true;
+            const m = measurePoint();
+            showSnap(m);
+            if (m) {
+              _v.copy(m.p).applyMatrix4(world.matrixWorld);
+              dist = _v.distanceTo(R.origin);
+              if (m.p.distanceTo(lastAim) > 0.004) {
+                lastAim.copy(m.p);
+                clearGroup(tmpG);
+                if (measureA) dimObjects(tmpG, measureA.p, m.p);
+              }
+            }
+          }
         }
       }
+      const on = dist !== null && dist < 12;
+      u.line.scale.z = on ? dist : 4;
+      u.line.material.color.set(lineCol);
+      u.dot.visible = on;
+      if (on) { u.dot.position.z = -dist; u.dot.scale.setScalar(0.004 + dist * 0.007); u.dot.material.color.set(lineCol === 0x1f6feb ? 0xffffff : lineCol); }
     }
     if (u.end) { u.end = false; xrSelectEnd(c); }
   }
+  if (!handleDrag) setHot(hotH);
   if (hover !== vm.hover) { vm.hover = hover; vm.dirty = true; }
   sticks(dt);
   if (vm.mesh && vm.mesh.parent && vm.mesh.visible && vm.dirty) {
@@ -1693,7 +1811,7 @@ async function startXR(mode) {
     setView('3d');
     toggleCatalog(false);
     xr.saved = { p: camera.position.clone(), q: camera.quaternion.clone() };
-    xr.mode = mode; xr.mini = false; xr.anchored = mode !== 'ar'; xr.aim = null; xr.hit = null;
+    xr.mode = mode; xr.env = mode !== 'ar'; xr.mini = false; xr.anchored = mode !== 'ar'; xr.aim = null; xr.hit = null;
     controls3d.enabled = false;
     sun.castShadow = false;
     renderer.xr.setReferenceSpaceType(xr.refType);
@@ -1723,6 +1841,8 @@ function onXREnd() {
   document.body.append(catalogEl);
   toggleCatalog(false);
   reticle.visible = tpMarker.visible = false;
+  if (tw.mesh) tw.mesh.visible = false;
+  tw.by = null;
   world.position.set(0, 0, 0); world.rotation.set(0, 0, 0); world.scale.setScalar(1);
   rig.position.set(0, 0, 0); rig.rotation.set(0, 0, 0);
   if (xr.saved) { camera.position.copy(xr.saved.p); camera.quaternion.copy(xr.saved.q); }
@@ -1764,21 +1884,21 @@ async function quickLook() {            // iPhone / iPad: без WebXR, чере
     a.click();
   } catch (e) { console.error(e); toast('Не получилось подготовить AR: ' + (e?.message || e), 5000); }
 }
-async function detectXR() {
-  let ar = false;
+async function detectXR() {             // одна кнопка: сквозной режим, если шлем умеет, иначе обычный VR
+  let ar = false, vr = false;
   if (navigator.xr) {
-    try { if (await navigator.xr.isSessionSupported('immersive-vr')) $('#btnVR').hidden = false; } catch { /* нет VR */ }
+    try { vr = await navigator.xr.isSessionSupported('immersive-vr'); } catch { /* нет VR */ }
     try { ar = await navigator.xr.isSessionSupported('immersive-ar'); } catch { /* нет AR */ }
   }
-  if (ar) $('#btnAR').hidden = false;
+  xr.kind = ar ? 'ar' : vr ? 'vr' : null;
+  if (xr.kind) $('#btnVR').hidden = false;
   else if (document.createElement('a').relList?.supports?.('ar')) $('#btnQL').hidden = false;
 }
-$('#btnVR').onclick = () => startXR('vr');
-$('#btnAR').onclick = () => startXR('ar');
+$('#btnVR').onclick = () => xr.kind && startXR(xr.kind);
 $('#btnQL').onclick = quickLook;
 
 // ───────────────────────── запуск ─────────────────────────
-window.__taburetka = { vm, vmBuild, vmDraw, tw, twDraw };
+window.__taburetka = { vm, vmBuild, vmDraw, tw, twDraw, twEnsure };
 document.fonts?.load('600 20px Oswald').then(() => { vm.dirty = true; });
 document.fonts?.load('20px "PT Mono"').then(() => { vm.dirty = true; rebuildDims(); });
 function boot() {

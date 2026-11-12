@@ -331,6 +331,19 @@ export const CATALOG = [
   { type: 'human', name: 'Человек 175 см', w: 0.45, d: 0.28, h: 1.75, color: '#7a8fa3' },
 ];
 
+export const CATS = [['all', 'Всё'], ['seat', 'Сиденья'], ['table', 'Столы'], ['store', 'Шкафы и полки'],
+  ['bedbath', 'Спальня и ванная'], ['tech', 'Техника'], ['room', 'Двери и стены'], ['decor', 'Декор']];
+const CAT_OF = {
+  seat: ['stool', 'chair', 'armchair', 'sofa', 'cornersofa', 'pouf', 'bench', 'barstool'],
+  table: ['table', 'coffeetable', 'roundtable', 'desk'],
+  store: ['wardrobe', 'dresser', 'shelf', 'wallshelf', 'kitchen', 'box'],
+  bedbath: ['bed', 'nightstand', 'bathtub', 'washer'],
+  tech: ['fridge', 'tv', 'lamp'],
+  room: ['wall', 'door', 'window'],
+  decor: ['plant', 'rug', 'picture', 'human'],
+};
+for (const d of CATALOG) d.cat = Object.keys(CAT_OF).find((k) => CAT_OF[k].includes(d.type)) || 'decor';
+
 export function fillBlank(group, type, w, d, h, color, open) {
   const b = new Builder(group, color || '#f1eee8');
   (BUILD[type] || BUILD.box)(b, w, d, h);
