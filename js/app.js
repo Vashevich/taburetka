@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=25';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=26';
 
 const STORE = 'taburetka.project.v1';
 
@@ -51,11 +51,19 @@ Object.assign(sun.shadow.camera, { left: -9, right: 9, top: 9, bottom: -9, near:
 sun.shadow.bias = -0.0005;
 world.add(sun, sun.target);             // свет живёт в координатах комнаты и едет вместе с ней
 
-const ground = new THREE.Mesh(new THREE.CircleGeometry(60, 48),
-  new THREE.MeshStandardMaterial({ color: '#DCCFAE', roughness: 1 }));
-ground.rotation.x = -Math.PI / 2;
-ground.position.y = -0.02;
-ground.receiveShadow = true;
+// Подложка без линии горизонта: земля того же цвета, что фон, а сетка уходит вдаль и растворяется.
+const FOG = new THREE.Fog(SKY, 14, 62);
+scene.fog = FOG;
+const ground = new THREE.Group();
+const groundPlane = new THREE.Mesh(new THREE.CircleGeometry(200, 48), new THREE.MeshBasicMaterial({ color: SKY, fog: false }));
+groundPlane.rotation.x = -Math.PI / 2;
+groundPlane.position.y = -0.03;
+const farGrid = new THREE.GridHelper(160, 160, 0x1b1a18, 0x1b1a18);
+farGrid.material.transparent = true;
+farGrid.material.opacity = 0.14;
+farGrid.position.y = -0.012;
+ground.add(groundPlane, farGrid);
+ground.traverse((o) => { o.raycast = () => {}; });
 scene.add(ground);
 
 // ───────────────────────── состояние ─────────────────────────
@@ -92,7 +100,8 @@ function normalize(d) {
     room: {
       w: clamp(num(room.w, 4), 0.5, 50), d: clamp(num(room.d, 5), 0.5, 50), h: clamp(num(room.h, 2.7), 0.5, 20),
       floor: room.floor || '#d9c7a8', wall: room.wall || '#f4f1ea',
-      ...(validMesh(room.mesh) ? { mesh: JSON.parse(JSON.stringify(room.mesh)) } : {}),
+      ...(validMesh(room.mesh) ? { mesh: { v: JSON.parse(JSON.stringify(room.mesh.v)), f: JSON.parse(JSON.stringify(room.mesh.f)),
+        ...(Array.isArray(room.mesh.c) && room.mesh.c.length === room.mesh.f.length ? { c: room.mesh.c.map((q) => (typeof q === 'string' && /^#[0-9a-f]{6}$/i.test(q) ? q : null)) } : {}) } } : {}),
       ...(room.sun && [room.sun.x, room.sun.y, room.sun.z].every(Number.isFinite) ? { sun: { x: room.sun.x, y: room.sun.y, z: room.sun.z } }
         : room.sun && Number.isFinite(room.sun.az) && Number.isFinite(room.sun.el) ? { sun: { az: room.sun.az, el: room.sun.el } } : {}),
     },
@@ -217,6 +226,7 @@ function cutFace(A, B) {                // A, B — { a, b, t } на двух р
   if (i1 < 0 || i2 < 0) return false;
   const lo = Math.min(i1, i2), hi = Math.max(i1, i2);
   m.f.splice(fi, 1, f.slice(lo, hi + 1), [...f.slice(hi), ...f.slice(0, lo + 1)]);
+  if (m.c) { while (m.c.length < m.f.length - 1) m.c.push(null); m.c.splice(fi, 1, m.c[fi] || null, m.c[fi] || null); }   // обе половины — прежнего цвета
   return true;
 }
 // Грани остаются плоскими: если сдвиг согнул бы грань, вместе с точкой едет вся эта грань.
@@ -239,6 +249,32 @@ function expandMove(ids, dir) {
     }
   }
   return [...S];
+}
+function faceAtRay() {                   // грань оболочки под курсором или лучом
+  if (!wallMesh) return -1;
+  world.updateMatrixWorld(true);
+  shellRay.ray.copy(ray.ray);
+  const hits = [];
+  for (const mesh of [wallMesh, floorMesh]) THREE.Mesh.prototype.raycast.call(mesh, shellRay, hits);
+  if (!hits.length) return -1;
+  hits.sort((p, q) => p.distance - q.distance);
+  return hits[0].object.userData.tri[hits[0].faceIndex] ?? -1;
+}
+function setFaceColor(c) {              // свой цвет у выделенной стены, пола или потолка; null — как у комнаты
+  if (!roomSel || roomSel.kind !== 'f') return;
+  const m = roomMesh(), fi = +roomSel.key.slice(1);
+  if (!m.c) m.c = m.f.map(() => null);
+  while (m.c.length < m.f.length) m.c.push(null);
+  m.c[fi] = c;
+  buildRoom(); commit(); updateFacePanel();
+}
+function updateFacePanel() {
+  const on = tool === 'room' && !!roomSel && roomSel.kind === 'f' && !renderer.xr.isPresenting, el = $('#facePanel');
+  el.hidden = !on;
+  if (!on) return;
+  const m = roomMesh(), fi = +roomSel.key.slice(1), ny = faceNormal(m.f[fi]).y;
+  $('#fTitle').textContent = ny > 0.7 ? 'Пол' : ny < -0.7 ? 'Потолок' : 'Стена';
+  markSwatch($('#fSwatches'), (m.c && m.c[fi]) || '');
 }
 function recenterRoom() {               // габариты комнаты — по сетке; центр возвращаем в ноль, сдвигая всё разом
   const R = state.room, m = roomMesh(), bb = new THREE.Box3();
@@ -300,22 +336,32 @@ function buildRoom() {
   disposeChildren(roomG);
   const { w, d, floor, wall } = state.room, m = roomMesh();
   // оболочка: пол отдельно (свой цвет), стены и потолок вместе; грани — плоские многоугольники
-  const fpos = [], spos = [];
+  const fpos = [], spos = [], fcol = [], scol = [], ftri = [], stri = [];
   let flat = true;
-  for (const f of m.f) {
+  m.f.forEach((f, fi) => {
     const n = faceNormal(f), up = n.y > 0.7, out = up ? fpos : spos, P = f.map(mv);
+    const col = new THREE.Color((m.c && m.c[fi]) || (up ? floor : wall)), ocol = up ? fcol : scol;
     const u = new THREE.Vector3(Math.abs(n.y) < 0.9 ? 0 : 1, Math.abs(n.y) < 0.9 ? 1 : 0, 0).cross(n).normalize(), w = n.clone().cross(u);
     const tris = P.length === 3 ? [[0, 1, 2]] : THREE.ShapeUtils.triangulateShape(P.map((q) => new THREE.Vector2(q.dot(u), q.dot(w))), []);
     for (const [i, j, k] of tris) {
       const a = P[i], b = P[j], c = P[k], flip = b.clone().sub(a).cross(c.clone().sub(a)).dot(n) < 0;
       out.push(a.x, a.y, a.z, ...(flip ? [c.x, c.y, c.z, b.x, b.y, b.z] : [b.x, b.y, b.z, c.x, c.y, c.z]));
+      for (let q = 0; q < 3; q++) ocol.push(col.r, col.g, col.b);
+      (up ? ftri : stri).push(fi);
     }
     if (up && f.some((i) => Math.abs(m.v[i][1]) > 1e-3)) flat = false;
-  }
-  const geo = (pos) => { const g = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.computeVertexNormals(); return g; };
-  floorMesh = new THREE.Mesh(geo(fpos), new THREE.MeshStandardMaterial({ color: floor, roughness: 0.95 }));
+  });
+  const geo = (pos, col) => {
+    const g = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    if (col) g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    g.computeVertexNormals();
+    return g;
+  };
+  floorMesh = new THREE.Mesh(geo(fpos, fcol), new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.95 }));
+  floorMesh.userData.tri = ftri;
   floorMesh.receiveShadow = true;
-  wallMesh = new THREE.Mesh(geo(spos), new THREE.MeshStandardMaterial({ color: wall, roughness: 1 }));
+  wallMesh = new THREE.Mesh(geo(spos, scol), new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 1 }));
+  wallMesh.userData.tri = stri;
   wallMesh.receiveShadow = true;
   const epos = [];                      // все рёбра граней, включая линии разреза на ровной поверхности
   for (const [a, b] of meshEdges()) epos.push(...m.v[a], ...m.v[b]);
@@ -831,6 +877,7 @@ function updateGizmo() {
     ln.raycast = () => {};
     gizmo.add(ln);
     gizmo.userData.selPos = selPos;
+    updateFacePanel();
     if (selPos) {                       // стрелки у выделенного элемента
       const hold = new THREE.Group();
       hold.position.copy(selPos);
@@ -1239,8 +1286,11 @@ function showCut(c) {                   // красная точка под ку
 function cancelCut() { cutA = null; showCut(null); }
 function tapCut() {                     // нажатие в «Комнате» мимо ручек: первая точка, вторая точка — разрез
   const c = findCut();
-  if (!c) {
-    if (cutA) cancelCut(); else if (roomSel) { roomSel = null; updateGizmo(); }
+  if (!c) {                             // мимо рёбер: начатый разрез отменяем, иначе выделяем грань под курсором
+    if (cutA) { cancelCut(); return; }
+    const fi = faceAtRay(), key = 'f' + fi;
+    roomSel = fi < 0 || (roomSel && roomSel.key === key) ? null : { key, kind: 'f', ids: [...roomMesh().f[fi]] };
+    updateGizmo();
     return;
   }
   if (!cutA) { cutA = c; showCut(null); updateStatus(); return; }
@@ -1451,6 +1501,7 @@ function setTool(t) {
   showSnap(null);
   showErase(null);
   vm.dirty = true;
+  if (t !== 'room') $('#facePanel').hidden = true;
   if (t === 'room') selId = null;
   roomSel = null;
   cutA = null;
@@ -1468,8 +1519,25 @@ function toast(msg, ms = 3200) {
   toastTimer = setTimeout(() => { t.hidden = true; }, ms);
 }
 
+// Базовый набор цветов вместо бесконечной палитры; цвет применяется сразу по нажатию.
+const PALETTE = ['#f4f1ea', '#e9e4da', '#d5d9dc', '#9aa0a6', '#2b2f36', '#1b1a18', '#e3cfa8', '#d9c7a8', '#c8a27a', '#9c6b3f', '#5a3e2b',
+  '#A61E1E', '#b5553c', '#C9963B', '#d8c9a0', '#5f8f4e', '#3f6b5c', '#8c9aa8', '#3d5a80'];
+function swatches(el, onPick) {
+  for (const c of PALETTE) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.style.background = c;
+    b.dataset.c = c;
+    b.title = c;
+    b.onclick = (e) => { e.preventDefault(); onPick(c); markSwatch(el, c); };
+    el.append(b);
+  }
+}
+function markSwatch(el, c) {
+  for (const b of el.children) b.classList.toggle('on', !!c && b.dataset.c.toLowerCase() === String(c).toLowerCase());
+}
 const P = { name: $('#pName'), w: $('#pW'), d: $('#pD'), h: $('#pH'), y: $('#pY'), rot: $('#pRot'),
-  color: $('#pColor'), keep: $('#pKeep'), lock: $('#pLock') };
+  keep: $('#pKeep'), lock: $('#pLock') };
 const cm = (m) => Math.round(m * 1000) / 10;
 function updateProps() {
   const it = sel(), el = $('#props');
@@ -1478,8 +1546,7 @@ function updateProps() {
   if (document.activeElement !== P.name) P.name.value = it.name;
   P.w.value = cm(it.w); P.d.value = cm(it.d); P.h.value = cm(it.h); P.y.value = cm(it.y);
   P.rot.value = Math.round((((THREE.MathUtils.radToDeg(it.rot) % 360) + 360) % 360) * 10) / 10;
-  $('#pColorWrap').hidden = it.type === 'model';
-  if (it.type !== 'model') P.color.value = it.color || '#f1eee8';
+  markSwatch($('#pSwatches'), it.color);
   P.keep.checked = !!it.keep;
   P.lock.checked = !!it.lock;
 }
@@ -1500,7 +1567,12 @@ function bindSize(input, key) {
 bindSize(P.w, 'w'); bindSize(P.d, 'd'); bindSize(P.h, 'h');
 P.y.addEventListener('change', () => editSel((it) => { it.y = r3(clamp(parseFloat(P.y.value) / 100 || 0, -5, 20)); if (it.y > 0.02) it.hold = 'free'; else delete it.hold; }, false));
 P.rot.addEventListener('change', () => editSel((it) => { it.rot = THREE.MathUtils.degToRad(parseFloat(P.rot.value) || 0); }, false));
-P.color.addEventListener('change', () => editSel((it) => { it.color = P.color.value; }));
+swatches($('#pSwatches'), (c) => editSel((it) => { it.color = c; }));
+swatches($('#rFloorSw'), (c) => { state.room.floor = c; buildRoom(); commit(); });
+swatches($('#rWallSw'), (c) => { state.room.wall = c; buildRoom(); commit(); });
+swatches($('#fSwatches'), (c) => setFaceColor(c));
+$('#fReset').onclick = () => setFaceColor(null);
+$('#fClose').onclick = () => { roomSel = null; updateGizmo(); };
 P.name.addEventListener('change', () => editSel((it) => { it.name = P.name.value.trim() || it.name; }, false));
 P.keep.addEventListener('change', () => editSel((it) => { it.keep = P.keep.checked; }, false));
 P.lock.addEventListener('change', () => editSel((it) => { it.lock = P.lock.checked; }, false));
@@ -1639,7 +1711,7 @@ const MENU = {
   room() {
     const R = state.room;
     $('#rW').value = cm(R.w); $('#rD').value = cm(R.d); $('#rH').value = cm(R.h);
-    $('#rFloor').value = R.floor; $('#rWall').value = R.wall; $('#rSnap').value = String(state.snap);
+    markSwatch($('#rFloorSw'), R.floor); markSwatch($('#rWallSw'), R.wall); $('#rSnap').value = String(state.snap);
     if (!$('#rSnap').value) $('#rSnap').value = '0.05';
     $('#roomDlg').showModal();
   },
@@ -1668,11 +1740,11 @@ $('#roomDlg').addEventListener('close', () => {
   const g = (id, def) => clamp(parseFloat($(id).value) / 100 || def, 0.5, 50);
   const old = state.room, oldSun = state.room.sun;
   state.room = { w: g('#rW', state.room.w), d: g('#rD', state.room.d), h: Math.min(20, g('#rH', state.room.h)),
-    floor: $('#rFloor').value, wall: $('#rWall').value };
+    floor: state.room.floor, wall: state.room.wall };
   if (oldSun) state.room.sun = oldSun;
   if (old.mesh) {                       // форма комнаты сохраняется и растягивается под новые размеры
     const kx = state.room.w / old.w, ky = state.room.h / old.h, kz = state.room.d / old.d;
-    state.room.mesh = { v: old.mesh.v.map((q) => [r3(q[0] * kx), r3(q[1] * ky), r3(q[2] * kz)]), f: old.mesh.f };
+    state.room.mesh = { ...old.mesh, v: old.mesh.v.map((q) => [r3(q[0] * kx), r3(q[1] * ky), r3(q[2] * kz)]) };
   }
   state.snap = parseFloat($('#rSnap').value) || 0;
   buildRoom(); fitOrtho(); commit();
@@ -2110,6 +2182,7 @@ function updateXRVis() {
   const ar = xr.mode === 'ar', pass = ar && !xr.env, bare = pass && !xr.mini;   // pass — сквозной режим
   ground.visible = !pass && !xr.mini;
   scene.background = pass ? null : SKY;
+  scene.fog = pass ? null : FOG;
   floorMesh.visible = gridLines.visible = wallMesh.visible = wallEdges.visible = !bare;
   outline.visible = shadowFloor.visible = bare;
   world.visible = !ar || xr.anchored;
