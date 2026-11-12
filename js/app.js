@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=15';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=16';
 
 const STORE = 'taburetka.project.v1';
 
@@ -74,8 +74,10 @@ function demo() {
   };
   return {
     v: 1, room: { ...state.room }, snap: 0.05, dims: [],
-    items: [mk('bed', -1.2, -1.45), mk('wardrobe', 1.4, -2.2), mk('desk', 1.7, 0.9, -Math.PI / 2),
-      mk('chair', 1.1, 0.9, Math.PI / 2), mk('stool', -0.3, 1.3), mk('plant', -1.7, 2.2)],
+    // стартовая комната: немного мебели, дверь и окно — видно, что всё можно двигать и открывать
+    items: [mk('bed', -1.2, -1.45), mk('nightstand', -0.15, -2.3), mk('window', 0.95, -2.45),
+      mk('wardrobe', -1.7, 1.6, Math.PI / 2), mk('desk', 1.7, -0.6, -Math.PI / 2), mk('chair', 1.1, -0.6, Math.PI / 2),
+      mk('door', 1.95, 1.7, -Math.PI / 2), mk('rug', 0.1, 0.7), mk('stool', 0.2, 0.9)],
   };
 }
 
@@ -1511,11 +1513,13 @@ const MENU = {
   },
   glb: exportGLB,
   cleardims() { state.dims = []; measureA = null; clearGroup(tmpG); rebuildDims(); commit(); },
-  new() {                               // пустая комната по умолчанию: размеры, ровный потолок, свет, вид — всё как в начале
-    load({ room: { w: 4, d: 5, h: 2.7, floor: '#d9c7a8', wall: '#f4f1ea' }, snap: state.snap, items: [], dims: [] });
+  new() {                               // комната по умолчанию: размеры, ровный потолок, свет, вид и стартовая мебель
+    const snap = state.snap;
+    state.room = { w: 4, d: 5, h: 2.7, floor: '#d9c7a8', wall: '#f4f1ea' };
+    load({ ...demo(), snap });
     commit();
     homeView();
-    toast('Новая пустая комната. Вернуть прежнюю — кнопка ↶');
+    toast('Новая комната. Вернуть прежнюю — кнопка ↶');
   },
   help() { $('#helpDlg').showModal(); },
 };
