@@ -368,29 +368,64 @@ const BUILD = {
     b.box(w - 0.1, h - 0.1, 0.008, 0, 0.05, 0,
       std('#bfe3f2', { transparent: true, opacity: 0.35, roughness: 0.1 }));
   },
-  // Деревянный человечек на шарнирах. Стоя — начало координат под ступнями; сидя — на сиденье под тазом,
-  // бёдра вперёд, голени свисают вниз.
+  // Деревянный человечек художника: яйцо-голова, грудь клином, шар-талия, таз колоколом, конечности на шарах.
+  // Позы: stand — стоит (начало координат под ступнями); sit — сидит на краю, голени свисают; sitf — сидит, ноги вперёд;
+  // lie — лежит на спине, головой в −Z.
   human(b, w, d, h, o = {}) {
-    const k = h / 1.75, sit = o.pose === 'sit', py = sit ? 0.1 : 0.92, S = (p) => p.map((v) => v * k);
-    b.ball(S([0, py + 0.72, 0]), 0.1 * k, b.m, 1.18);                 // голова
-    b.seg(S([0, py + 0.52, 0]), S([0, py + 0.63, 0]), 0.035 * k, b.m2);   // шея
-    b.seg(S([0, py + 0.14, 0]), S([0, py + 0.52, 0]), 0.17 * k);      // грудь
-    b.ball(S([0, py + 0.1, 0]), 0.085 * k);                           // поясница
-    b.seg(S([0, py + 0.08, 0]), S([0, py - 0.08, 0]), 0.15 * k);      // таз
+    const k = h / 1.75, pose = o.pose || 'stand', sit = pose === 'sit' || pose === 'sitf';
+    const root = b.g, fig = new THREE.Group();
+    b.g = fig;
+    const mj = std(b.m.color.clone().multiplyScalar(0.88));
+    const V = (p) => new THREE.Vector3(p[0] * k, p[1] * k, p[2] * k);
+    const ell = (p, r, m = b.m) => {                      // эллипсоид
+      const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 14), m);
+      mesh.position.copy(V(p)); mesh.scale.set(r[0] * k, r[1] * k, r[2] * k);
+      return b.finish(mesh);
+    };
+    const joint = (p, r) => ell(p, [r, r, r], mj);
+    const limb = (p, q, r1, r2) => {                      // конус от p (радиус r1) к q (радиус r2)
+      const a = V(p), c = V(q), dir = c.clone().sub(a), len = Math.max(dir.length(), 0.004);
+      const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r2 * k, r1 * k, len, 20), b.m);
+      mesh.position.copy(a).add(c).multiplyScalar(0.5);
+      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.multiplyScalar(1 / len));
+      return b.finish(mesh);
+    };
+    const tub = (y0, y1, rBot, rTop, sz) => {             // тело вращения, сплюснутое по глубине
+      const mesh = new THREE.Mesh(new THREE.CylinderGeometry(rTop * k, rBot * k, (y1 - y0) * k, 24), b.m);
+      mesh.position.set(0, ((y0 + y1) / 2) * k, 0); mesh.scale.z = sz;
+      return b.finish(mesh);
+    };
+    const py = sit ? 0.1 : 0.95;                          // высота тазобедренных шаров
+    tub(py - 0.04, py + 0.13, 0.15, 0.1, 0.72);           // таз
+    ell([0, py - 0.04, 0], [0.15, 0.06, 0.108]);
+    joint([0, py + 0.17, 0], 0.072);                      // талия
+    tub(py + 0.21, py + 0.5, 0.105, 0.19, 0.6);           // грудь
+    ell([0, py + 0.5, 0], [0.19, 0.04, 0.114]);
+    joint([0, py + 0.56, 0], 0.04);                       // шея
+    ell([0, py + 0.69, 0.005], [0.083, 0.115, 0.095]);    // голова
     for (const s of [-1, 1]) {
-      const sh = [s * 0.215, py + 0.47, 0], el = sit ? [s * 0.235, py + 0.2, 0.03] : [s * 0.24, py + 0.19, 0];
-      const wr = sit ? [s * 0.19, py + 0.09, 0.27] : [s * 0.235, py - 0.07, 0.03];
-      b.ball(S(sh), 0.055 * k); b.seg(S(sh), S(el), 0.042 * k);
-      b.ball(S(el), 0.042 * k); b.seg(S(el), S(wr), 0.036 * k);
-      b.ball(S(wr), 0.045 * k, b.m);                                  // кисть
-      const hip = [s * 0.09, py - 0.04, 0], kn = sit ? [s * 0.09, py - 0.02, 0.43] : [s * 0.09, 0.5, 0];
-      const an = sit ? [s * 0.09, py - 0.44, 0.43] : [s * 0.09, 0.08, 0];
-      b.ball(S(hip), 0.07 * k); b.seg(S(hip), S(kn), 0.062 * k);
-      b.ball(S(kn), 0.055 * k); b.seg(S(kn), S(an), 0.048 * k);
-      b.ball(S(an), 0.042 * k);
-      b.box(0.09 * k, 0.05 * k, 0.24 * k, an[0] * k, (an[1] - 0.08) * k, (an[2] + 0.06) * k);   // ступня
+      const sh = [s * 0.235, py + 0.46, 0];
+      const el = sit ? [s * 0.25, py + 0.2, 0.04] : [s * 0.255, py + 0.19, 0];
+      const wr = sit ? [s * 0.2, py + 0.08, 0.26] : [s * 0.255, py - 0.05, 0.03];
+      joint(sh, 0.052); limb(sh, el, 0.046, 0.038);
+      joint(el, 0.036); limb(el, wr, 0.037, 0.028);
+      joint(wr, 0.027);
+      if (sit) ell([wr[0], wr[1] - 0.005, wr[2] + 0.075], [0.036, 0.02, 0.08]);
+      else ell([wr[0], wr[1] - 0.085, wr[2]], [0.022, 0.085, 0.038]);   // кисть-лепесток
+      const x = s * 0.085, hip = [x, py - 0.05, 0];
+      const kn = pose === 'stand' || pose === 'lie' ? [x, 0.51, 0] : [x, py - 0.03, 0.43];
+      const an = pose === 'sit' ? [x, py - 0.45, 0.43] : pose === 'sitf' ? [x, py - 0.045, 0.84] : [x, 0.085, 0];
+      joint(hip, 0.062); limb(hip, kn, 0.066, 0.05);
+      joint(kn, 0.047); limb(kn, an, 0.048, 0.034);
+      joint(an, 0.032);
+      if (pose === 'sitf') ell([x, an[1] + 0.075, an[2] + 0.035], [0.04, 0.115, 0.03]);
+      else ell([x, an[1] - 0.055, an[2] + 0.075], [0.042, 0.03, 0.12]);   // ступня
     }
+    b.g = root;
+    if (pose === 'lie') { fig.rotation.x = -Math.PI / 2; fig.position.set(0, 0.115 * k, 0.875 * k); }
+    root.add(fig);
   },
+
 
 };
 
@@ -427,7 +462,7 @@ export const CATALOG = [
   { type: 'wall', name: 'Перегородка', w: 2.0, d: 0.1, h: 2.7, color: '#f2efe9' },
   { type: 'door', name: 'Дверь', w: 0.9, d: 0.1, h: 2.05, color: '#d9c7a8' },
   { type: 'window', name: 'Окно', w: 1.4, d: 0.1, h: 1.4, y: 0.85, color: '#f5f5f2' },
-  { type: 'human', name: 'Человек', w: 0.5, d: 0.3, h: 1.75, color: '#c8a27a' },
+  { type: 'human', name: 'Человек', w: 0.5, d: 0.3, h: 1.75, color: '#e6cfa3' },
 ];
 
 export const CATS = [['all', 'Всё'], ['seat', 'Сиденья'], ['table', 'Столы'], ['store', 'Шкафы и полки'],

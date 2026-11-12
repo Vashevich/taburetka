@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=41';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=42';
 
 const STORE = 'taburetka.project.v1';
 
@@ -484,6 +484,19 @@ function settle(list) {                 // опустить на опору то
     refreshDims(o.id);
   }
 }
+// Поза человечка. «Сидит» бывает двух видов: на краю опоры голени свисают, посреди опоры или на полу ноги вытянуты вперёд.
+function setPose(it, pose) {
+  if (pose === 'sit') {
+    const kk = it.h / 1.75, fx = it.x + Math.sin(it.rot) * 0.45 * kk, fz = it.z + Math.cos(it.rot) * 0.45 * kk;
+    if (restY(it, fx, fz) > it.y - 0.2) pose = 'sitf';
+  }
+  if ((it.pose || 'stand') === pose) return false;
+  if (pose === 'stand') delete it.pose; else it.pose = pose;
+  const g = objs.get(it.id);
+  if (g) fillItem(it, g);
+  ptCache.delete(it.id);
+  return true;
+}
 function restY(it, x, z) {
   const fl = floorAt(x, z);              // пол может быть неровным
   if (it.type === 'rug') return fl;
@@ -561,8 +574,7 @@ function dragMove(it, g, lr) {
   if (g.free) { if (it.y > restY(it, it.x, it.z) + 0.02) it.hold = 'free'; else delete it.hold; }
   else if (g.float) it.hold = 'wall'; else delete it.hold;
   if (it.type === 'human' && !g.free) {  // человечек: на мебели садится, на полу встаёт
-    const pose = !g.float && it.y > floorAt(it.x, it.z) + 0.05 ? 'sit' : 'stand';
-    if ((it.pose || 'stand') !== pose) { if (pose === 'sit') it.pose = 'sit'; else delete it.pose; fillItem(it, objs.get(it.id)); }
+    setPose(it, !g.float && it.y > floorAt(it.x, it.z) + 0.05 ? 'sit' : 'stand');
   }
   for (const r of g.riders || []) { r.o.x = r3(it.x + r.dx); r.o.y = r3(it.y + r.dy); r.o.z = r3(it.z + r.dz); placeItem(r.o); refreshDims(r.o.id); }
   return true;
@@ -1427,7 +1439,13 @@ function updateDrag(d, lr) {
     if (d.s0 === null) { d.s0 = sp; return false; }
     const dl = sp - d.s0, st = state.snap, sn = (v) => (st > 0 ? Math.round(v / st) * st : v);
     if (d.axis !== 'y') { const m = sn(dl); it.x = r3(d.x0 + d.dir.x * m); it.z = r3(d.z0 + d.dir.z * m); }   // вдоль оси самого предмета
-    else {
+    else if (it.type === 'human') {      // человечка вдавливают в опору: сначала садится, потом ложится; тянут вверх — встаёт
+      const base = restY(it, it.x, it.z);
+      if (d.dep0 === undefined) d.dep0 = Math.abs(d.y0 - base) < 0.02 ? ({ sit: 0.5, sitf: 0.5, lie: 0.95 }[it.pose] || 0) : 0;
+      const yv = d.y0 - d.dep0 + sn(dl), dep = base - yv;
+      if (dep >= 0) { it.y = r3(base); setPose(it, dep < 0.3 ? 'stand' : dep < 0.75 ? 'sit' : 'lie'); }
+      else { it.y = r3(yv); setPose(it, 'stand'); }
+    } else {
       let y = sn(d.y0 + dl);
       const H = ceilMin(it, it.x, it.z);
       if (st > 0) { if (Math.abs(y) < 0.03) y = 0; if (Math.abs(y + it.h - H) < 0.06) y = H - it.h; }
@@ -1567,9 +1585,7 @@ const anims = [];
 function tapPart(pk) {
   const it = item(pk.id);
   if (it && it.type === 'human') {      // «Действие» по человечку: встать или сесть на том же месте
-    if (it.pose === 'sit') delete it.pose; else it.pose = 'sit';
-    fillItem(it, objs.get(it.id));
-    ptCache.delete(it.id);
+    setPose(it, it.pose ? 'stand' : 'sit');
     commit();
     return true;
   }
