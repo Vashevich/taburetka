@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=62';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=63';
 
 const STORE = 'taburetka.project.v1';
 
@@ -854,12 +854,14 @@ function addBlank(def) {
 }
 function removeItem(id) {
   const gone = item(id), riders = gone ? ridersOf(gone) : [];
-  for (const m of state.dims) for (const k of ['a', 'b'])   // размеры, привязанные к предмету, остаются на месте
-    if (m[k + 'i']?.id === id) { m[k] = dimEnd(m, k).toArray().map(r3); delete m[k + 'i']; }
+  const nd = state.dims.filter((m) => m.ai?.id !== id && m.bi?.id !== id);   // размеры, привязанные к предмету, уходят вместе с ним
+  const dimsGone = nd.length !== state.dims.length;
+  state.dims = nd;
   const g = objs.get(id);
   if (g) { disposeChildren(g); itemsG.remove(g); objs.delete(id); }
   state.items = state.items.filter((i) => i.id !== id);
   shellDirty = true;
+  if (dimsGone) rebuildDims();
   settle(riders);
   if (selId === id) select(null);
   commit();
