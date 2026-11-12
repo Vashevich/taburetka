@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=45';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=46';
 
 const STORE = 'taburetka.project.v1';
 
@@ -485,8 +485,8 @@ function settle(list) {                 // опустить на опору то
   }
 }
 // Поза человечка. «Сидит» бывает двух видов: на краю опоры голени свисают, посреди опоры или на полу ноги вытянуты вперёд.
-function setPose(it, pose) {
-  if (pose === 'sit') {
+function setPose(it, pose, exact) {
+  if (pose === 'sit' && !exact) {
     const kk = it.h / 1.75, fx = it.x + Math.sin(it.rot) * 0.45 * kk, fz = it.z + Math.cos(it.rot) * 0.45 * kk;
     if (restY(it, fx, fz) > it.y - 0.2) pose = 'sitf';
   }
@@ -1596,7 +1596,8 @@ const anims = [];
 function tapPart(pk) {
   const it = item(pk.id);
   if (it && it.type === 'human') {      // «Действие» по человечку: встать или сесть на том же месте
-    setPose(it, it.pose ? 'stand' : 'sit');
+    const order = ['stand', 'sit', 'sitf', 'lie'];   // «Действие» перебирает позы по кругу
+    setPose(it, order[(order.indexOf(it.pose || 'stand') + 1) % order.length], true);
     commit();
     return true;
   }
@@ -1628,7 +1629,7 @@ const HINTS = {
   select: 'Тащите предмет: он всегда примагничен — к полу, к другой мебели, к стене или потолку. У выбранного: стрелки — по осям, кубики — тянуть, дуга — поворот',
   room: 'Комната: нажмите на точку, ребро или плашку грани — появятся стрелки. Разрез грани: нажмите на ребро, затем на другое ребро той же грани. Солнце — направление света',
   erase: 'Ластик: наведите на предмет или размер — он станет красным — и нажмите, чтобы удалить',
-  act: 'Нажимайте на дверцы и ящики — они открываются; по человечку — он садится или встаёт',
+  act: 'Нажимайте на дверцы и ящики — они открываются; по человечку — он по очереди встаёт, садится, вытягивает ноги, ложится',
   measure: 'Рулетка: укажите первую точку — липнет к углам',
 };
 function updateStatus() {
