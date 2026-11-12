@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=47';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=48';
 
 const STORE = 'taburetka.project.v1';
 
