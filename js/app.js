@@ -498,11 +498,13 @@ addEventListener('resize', resize);
 
 // ───────────────────────── лучи и выбор ─────────────────────────
 const ray = new THREE.Raycaster();
+const curPx = new THREE.Vector4();
 const ndc = new THREE.Vector2(), _inv = new THREE.Matrix4(), _v = new THREE.Vector3(), _c = new THREE.Vector3();
 
 function setRay(e) {
   const r = canvas.getBoundingClientRect();
   ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  curPx.set(e.clientX - r.left, e.clientY - r.top, r.width, r.height);
   ray.setFromCamera(ndc, cam());
 }
 function localRay(r) {                  // луч в координатах группы world
@@ -521,7 +523,7 @@ function pickItem() {
   for (const h of hits) {
     let o = h.object;
     while (o && o.parent !== itemsG) o = o.parent;
-    if (o && o.userData.id) return { id: o.userData.id, point: h.point.clone() };
+    if (o && o.userData.id) return { id: o.userData.id, point: h.point.clone(), hit: h };
   }
   return null;
 }
@@ -584,6 +586,7 @@ function viewHeightAt(obj) {
 }
 function updateConstSize() {
   for (const h of handles) h.scale.setScalar(h.userData.cs * viewHeightAt(h));
+  if (snapMarker.visible) snapMarker.scale.setScalar((snapMarker.userData.cs || 0.01) * viewHeightAt(snapMarker));
   for (const g of [dimsG, tmpG]) for (const o of g.children) {
     if (!o.userData.label) continue;
     const s = 0.034 * viewHeightAt(o);
@@ -638,12 +641,66 @@ function rebuildDims() {
   clearGroup(dimsG);
   for (const m of state.dims) dimObjects(dimsG, new THREE.Vector3(...m.a), new THREE.Vector3(...m.b));
 }
+// Привязка рулетки: сначала углы габаритов мебели и комнаты, затем вершины модели под курсором,
+// иначе — точка на поверхности или на полу (по сетке).
+const SNAP_COL = { corner: 0x2e9e4f, vertex: 0x1f6feb, free: 0xd9482b };
+const SNAP_NAME = { corner: 'угол', vertex: 'вершина', free: '' };
+const snapMarker = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12),
+  new THREE.MeshBasicMaterial({ color: SNAP_COL.free, depthTest: false, transparent: true }));
+snapMarker.renderOrder = 25;
+snapMarker.visible = false;
+snapMarker.raycast = () => {};
+world.add(snapMarker);
+let snapKind = '';
+function showSnap(m) {
+  snapMarker.visible = !!m;
+  snapKind = m ? SNAP_NAME[m.kind] : '';
+  if (!m) return;
+  snapMarker.position.copy(m.p);
+  snapMarker.material.color.set(SNAP_COL[m.kind]);
+  snapMarker.userData.cs = (m.kind === 'free' ? 0.006 : 0.011) * (coarse ? 1.5 : 1);
+}
+function itemCorners(it, out) {
+  const c = Math.cos(it.rot), s = Math.sin(it.rot);
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    const lx = (sx * it.w) / 2, lz = (sz * it.d) / 2, x = it.x + lx * c + lz * s, z = it.z - lx * s + lz * c;
+    out.push(new THREE.Vector3(x, it.y, z), new THREE.Vector3(x, it.y + it.h, z));
+  }
+}
+function pxDist(pLocal) {               // расстояние от курсора до точки на экране, в пикселях
+  _v.copy(pLocal).applyMatrix4(world.matrixWorld).project(cam());
+  if (_v.z > 1 || _v.z < -1) return Infinity;
+  return Math.hypot(((_v.x + 1) / 2) * curPx.z - curPx.x, ((1 - _v.y) / 2) * curPx.w - curPx.y);
+}
+function nearest(points, lim) {
+  let best = null, bd = lim;
+  for (const p of points) { const d = pxDist(p); if (d < bd) { bd = d; best = p; } }
+  return best;
+}
 function measurePoint() {
+  world.updateMatrixWorld(true);
+  const lim = coarse ? 30 : 14, R = state.room;
+  const corners = [];
+  for (const it of state.items) itemCorners(it, corners);
+  for (const x of [-R.w / 2, R.w / 2]) for (const z of [-R.d / 2, R.d / 2])
+    corners.push(new THREE.Vector3(x, 0, z), new THREE.Vector3(x, R.h, z));
+  const c = nearest(corners, lim);
+  if (c) return { p: c, kind: 'corner' };
   const pk = pickItem();
-  if (pk) { world.updateMatrixWorld(true); return world.worldToLocal(pk.point); }
+  if (pk) {
+    const f = pk.hit.face, pos = pk.hit.object.geometry?.attributes?.position;
+    if (f && pos) {
+      const vs = [f.a, f.b, f.c].map((i) => world.worldToLocal(
+        new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(pk.hit.object.matrixWorld)));
+      const v = nearest(vs, lim);
+      if (v) return { p: v, kind: 'vertex' };
+    }
+    return { p: world.worldToLocal(pk.point), kind: 'free' };
+  }
   const p = hitPlaneY(localRay(ray.ray), 0);
-  if (p && state.snap > 0) { p.x = Math.round(p.x / state.snap) * state.snap; p.z = Math.round(p.z / state.snap) * state.snap; }
-  return p;
+  if (!p) return null;
+  if (state.snap > 0) { p.x = Math.round(p.x / state.snap) * state.snap; p.z = Math.round(p.z / state.snap) * state.snap; }
+  return { p, kind: 'free' };
 }
 
 // ───────────────────────── указатель (мышь / палец) ─────────────────────────
@@ -753,11 +810,13 @@ function onMove(e) {
     updateStatus();
     return;
   }
-  if (tool === 'measure' && measureA && e.pointerType === 'mouse') {
+  if (tool === 'measure' && e.pointerType === 'mouse' && !(down && down.moved)) {
     setRay(e);
-    const p = measurePoint();
+    const m = measurePoint(), was = snapKind;
+    showSnap(m);
     clearGroup(tmpG);
-    if (p) dimObjects(tmpG, measureA, p);
+    if (m && measureA) dimObjects(tmpG, measureA, m.p);
+    if (was !== snapKind) updateStatus();
   }
 }
 function onUp(e) {
@@ -778,8 +837,10 @@ function onUp(e) {
 function onTap(e) {
   setRay(e);
   if (tool === 'measure') {
-    const p = measurePoint();
-    if (!p) return;
+    const m = measurePoint();
+    if (!m) return;
+    const p = m.p.clone();
+    showSnap(m);
     if (!measureA) measureA = p;
     else {
       state.dims.push({ a: measureA.toArray().map(r3), b: p.toArray().map(r3) });
@@ -805,12 +866,12 @@ const HINTS = {
   select: 'Нажмите на предмет и тащите его по полу',
   rotate: 'Выберите предмет и тащите вокруг него — поворот с шагом 15°',
   pull: 'Выберите предмет и тащите цветные шарики на гранях',
-  measure: 'Рулетка: укажите первую точку',
+  measure: 'Рулетка: укажите первую точку — липнет к углам',
 };
 function updateStatus() {
   const it = sel();
   let s = HINTS[tool];
-  if (tool === 'measure') s = measureA ? 'Рулетка: укажите вторую точку' : HINTS.measure;
+  if (tool === 'measure') s = (measureA ? 'Рулетка: укажите вторую точку' : HINTS.measure) + (snapKind ? ` · привязка: ${snapKind}` : '');
   else if (it) s = `${it.name} — ${fmt(it.w)} × ${fmt(it.d)} × ${fmt(it.h)}`.replace(/ см(?= ×)/g, '');
   $('#status').textContent = s;
 }
@@ -818,6 +879,7 @@ function setTool(t) {
   tool = t;
   measureA = null;
   clearGroup(tmpG);
+  showSnap(null);
   for (const b of $$('#tools [data-tool]')) b.classList.toggle('on', b.dataset.tool === t);
   updateGizmo(); updateStatus();
 }
@@ -1316,6 +1378,7 @@ async function startXR(mode) {
   }
   try {
     select(null);
+    setTool('select');
     setView('3d');
     toggleCatalog(false);
     xr.saved = { p: camera.position.clone(), q: camera.quaternion.clone() };
