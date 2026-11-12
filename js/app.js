@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS } from './furniture.js?v=51';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS } from './furniture.js?v=52';
 
 const STORE = 'taburetka.project.v1';
 
@@ -793,6 +793,7 @@ function setView(v) {
   if (v === 'plan') fitOrtho();
   $('#btn3d').classList.toggle('on', v === '3d');
   $('#btnPlan').classList.toggle('on', v === 'plan');
+  updateXRVis();
 }
 // Мягкое затенение в углах и под мебелью (на экране; в шлеме сцена рисуется напрямую).
 let post = null;
@@ -822,7 +823,7 @@ async function initPost() {
     });
     composer.addPass(new OutputPass());
     composer.setSize(innerWidth, innerHeight);
-    post = { composer, render(c) { rp.camera = c; ao[0].enabled = c === camera; ao[1].enabled = c === ortho; composer.render(); } };
+    post = { composer, render(c) { rp.camera = c; ao[0].enabled = c === camera; ao[1].enabled = false; composer.render(); } };
   } catch (e) { console.warn('Затенение недоступно', e); post = null; }
 }
 function resize() {
@@ -2377,11 +2378,12 @@ function updateXRVis() {
   const ar = xr.mode === 'ar', pass = ar && !xr.env, bare = pass && !xr.mini;   // pass — сквозной режим
   ground.visible = !pass && !xr.mini;
   scene.background = pass ? null : SKY;
-  scene.fog = pass ? null : FOG;
+  scene.fog = pass || view === 'plan' ? null : FOG;   // на плане камера далеко сверху — дымка замыливала бы всё
   floorMesh.visible = wallMesh.visible = wallEdges.visible = !bare;
   gridLines.visible = !bare && state.grid !== false;
   farGrid.visible = state.grid !== false;
   outline.visible = shadowFloor.visible = bare;
+  if (view === 'plan' && !renderer.xr.isPresenting) wallMesh.visible = false;   // на плане из оболочки виден только пол
   if (state.room.blank) {               // чистый лист: комнаты не видно, тени ложатся прямо на подложку
     floorMesh.visible = wallMesh.visible = wallEdges.visible = gridLines.visible = outline.visible = false;
     shadowFloor.visible = true;
