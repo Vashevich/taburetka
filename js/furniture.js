@@ -194,6 +194,48 @@ export function sofaDims(w, d, h, p = {}) {
   const armTop = p.arm > 0 ? Math.max(baseH + 0.03, Math.min(p.arm, h)) : baseH + Math.max(0.05, Math.min(h - baseH - 0.12, 0.3));
   return { seat, baseH, armW, backD, armTop, armH: armTop - baseH };
 }
+// Параметр части: значение из предмета (p[key]) или значение по умолчанию, всегда в допустимых пределах.
+const PV = (p, key, def, lo, hi) => Math.max(lo, Math.min(p && p[key] > 0 ? p[key] : def, Math.max(lo, hi)));
+// Ручки частей по типам: где стоит стрелка (в осях предмета), вдоль какой оси тянется, текущее значение и пределы.
+// key 'h' и 'd' — общий размер (верх и перёд), sign −1 — стрелка наружу уменьшает значение.
+const seatPart = (type, w, d, h, p, z = d * 0.15) => ({ key: 'seat', axis: 'y', pos: [0, seatOf(type, h, p), z], v: seatOf(type, h, p), lo: 0.14, hi: h - 0.06 });
+const topPart = (w, d, h, lo, x = 0, z = 0) => ({ key: 'h', axis: 'y', pos: [x, h, z], v: h, lo, hi: 20 });
+const barPart = (k) => (w, d, h, p) => [{ key: 'bar', axis: 'y', pos: [0, PV(p, 'bar', h * k, 0.05, h - 0.08), d / 2 - 0.03], v: PV(p, 'bar', h * k, 0.05, h - 0.08), lo: 0.05, hi: h - 0.08 }];
+const shelfPart = (def, lo, hi) => (w, d, h, p) => { const v = PV(p, 'shelf', def(h), lo(h), hi(h)); return [{ key: 'shelf', axis: 'y', pos: [0, v, d / 2 - 0.02], v, lo: lo(h), hi: hi(h) }]; };
+const WSHELF = [(h) => (h > 1.2 ? h - 0.36 : h / 2), () => 0.2, (h) => h - 0.12], KSHELF = [(h) => 0.1 + (h - 0.14) / 2, () => 0.16, (h) => h - 0.1];
+const CSHELF = [(h) => h / 2, () => 0.08, (h) => h - 0.08], TSHELF = [(h) => h * 0.3, () => 0.04, (h) => h - 0.08];
+const shelfGap = (h, p) => { const n = Math.max(1, Math.round((h - 0.02) / PV(p, 'gap', (h - 0.02) / Math.max(1, Math.round(h / 0.35)), 0.12, h - 0.02))); return { n, gap: (h - 0.02) / n }; };
+export const PARTS = {
+  sofa(w, d, h, p) {
+    const q = sofaDims(w, d, h, p), ax = w / 2 - q.armW / 2, zc = q.backD / 2;
+    return [{ key: 'seat', axis: 'y', pos: [0, q.seat, zc], v: q.seat, lo: 0.14, hi: h - 0.06 },
+      { key: 'arm', axis: 'y', pos: [-ax, q.armTop, zc], v: q.armTop, lo: q.seat - 0.09, hi: h },
+      { key: 'arm', axis: 'y', pos: [ax, q.armTop, zc], v: q.armTop, lo: q.seat - 0.09, hi: h },
+      { key: 'backd', axis: 'z', pos: [0, (q.seat + h) / 2 + 0.06, -d / 2 + q.backD], v: q.backD, lo: 0.06, hi: d - 0.3 },
+      topPart(w, d, h, Math.max(q.seat + 0.06, q.armTop), 0, -d / 2 + q.backD / 2),
+      { key: 'd', axis: 'z', pos: [0, q.baseH * 0.45, d / 2], v: d, lo: q.backD + 0.3, hi: 20 }];
+  },
+  cornersofa: (w, d, h, p) => [seatPart('cornersofa', w, d, h, p, -d / 2 + 0.5), topPart(w, d, h, seatOf('cornersofa', h, p) + 0.06, 0, -d / 2 + 0.1)],
+  recliner: (w, d, h, p) => [seatPart('recliner', w, d, h, p, 0.05), topPart(w, d, h, seatOf('recliner', h, p) + 0.06, 0, -d / 2 + 0.08)],
+  chair: (w, d, h, p) => [seatPart('chair', w, d, h, p, 0), topPart(w, d, h, seatOf('chair', h, p) + 0.06, 0, -d / 2 + 0.02)],
+  officechair: (w, d, h, p) => [seatPart('officechair', w, d, h, p, 0.02), topPart(w, d, h, seatOf('officechair', h, p) + 0.1, 0, -d * 0.38)],
+  toilet: (w, d, h, p) => [seatPart('toilet', w, d, h, p, 0.1)],
+  bed: (w, d, h, p) => [seatPart('bed', w, d, h, p, 0.2), topPart(w, d, h, seatOf('bed', h, p) + 0.06, 0, -d / 2 + 0.03)],
+  stool: barPart(0.3), barstool: barPart(0.32), bench: barPart(0.35),
+  bunk(w, d, h, p) {
+    const up = PV(p, 'up', h * 0.62, 0.8, h - 0.45), low = PV(p, 'low', 0.25, 0.1, up - 0.55);
+    return [{ key: 'low', axis: 'y', pos: [0, low + 0.26, d / 2 - 0.1], v: low, lo: 0.1, hi: up - 0.55 },
+      { key: 'up', axis: 'y', pos: [0, up + 0.26, d / 2 - 0.1], v: up, lo: Math.max(0.8, low + 0.55), hi: h - 0.45 }];
+  },
+  table: (w, d, h, p) => { const v = PV(p, 'inset', 0.03, 0, Math.min(w, d) / 2 - 0.1); return [{ key: 'inset', axis: 'x', sign: -1, pos: [w / 2 - v - 0.025, h * 0.45, d / 2 - v - 0.025], v, lo: 0, hi: Math.min(w, d) / 2 - 0.1 }]; },
+  desk: (w, d, h, p) => { const v = PV(p, 'side', 0.04, 0.0125, w / 2 - 0.2); return [{ key: 'side', axis: 'x', sign: -1, pos: [w / 2 - v, h * 0.45, d / 2 - 0.03], v, lo: 0.0125, hi: w / 2 - 0.2 }]; },
+  coffeetable: shelfPart(...TSHELF), wardrobe: shelfPart(...WSHELF), kitchen: shelfPart(...KSHELF), wallcabinet: shelfPart(...CSHELF),
+  shelf: (w, d, h, p) => { const g = shelfGap(h, p); return [{ key: 'gap', axis: 'y', pos: [0, g.gap, d / 2], v: g.gap, lo: 0.12, hi: h - 0.02 }]; },
+  sideboard: (w, d, h, p) => { const v = PV(p, 'dr', Math.min(0.18, h * 0.22), 0.08, h * 0.5); return [{ key: 'dr', axis: 'y', sign: -1, pos: [0, h - 0.02 - v, d / 2], v, lo: 0.08, hi: h * 0.5 }]; },
+  fridge: (w, d, h, p) => { const v = PV(p, 'split', h * 0.62, 0.4, h - 0.25); return [{ key: 'split', axis: 'y', pos: [0, v, d / 2], v, lo: 0.4, hi: h - 0.25 }]; },
+};
+PARTS.armchair = PARTS.sofa; PARTS.bed1 = PARTS.bed; PARTS.lowshelf = PARTS.shelf;
+export const partsOf = (it) => (PARTS[it.type] ? PARTS[it.type](it.w, it.d, it.h, it.p || {}) : []);
 function sofa(b, w, d, h, o = {}) {    // диван и кресло: сиденье выдвигается вперёд, вся глубина становится около 2 м
   const { baseH, armW, backD, armH } = sofaDims(w, d, h, o.p || {});
   b.box(w, baseH, d, 0, 0, 0, b.m2);
@@ -244,28 +286,26 @@ const BUILD = {
   wall(b, w, d, h) { b.box(w, h, d); },
   rug(b, w, d, h) { b.box(w, h, d); },
 
-  wardrobe(b, w, d, h) {
-    const D = d - 0.02, zc = -0.01, t = 0.018;
+  wardrobe(b, w, d, h, o = {}) {
+    const D = d - 0.02, zc = -0.01, t = 0.018, sy = PV(o.p, 'shelf', WSHELF[0](h), WSHELF[1](h), WSHELF[2](h));
     carcass(b, w, h, D, zc, t, 0.05);
-    if (h > 1.2) {                      // полка сверху и штанга под ней
-      b.box(w - 2 * t, t, D - 0.012, 0, h - 0.36, zc + 0.004);
-      b.box(w - 2 * t, 0.025, 0.025, 0, h - 0.46, zc, b.m2);
-    } else b.box(w - 2 * t, t, D - 0.012, 0, h / 2, zc + 0.004);
+    b.box(w - 2 * t, t, D - 0.012, 0, sy, zc + 0.004);   // полка; в высоком шкафу под ней штанга
+    if (h > 1.2 && sy > 0.6) b.box(w - 2 * t, 0.025, 0.025, 0, sy - 0.1, zc, b.m2);
     fronts(b, w, h - 0.06, d, Math.max(1, Math.round(w / 0.5)), 1, 0.05, d / 2 - 0.01, 'v');
   },
   dresser(b, w, d, h) {
     carcass(b, w, h, d - 0.02, -0.01, 0.018, 0.05);
     fronts(b, w, h - 0.06, d, w > 1.1 ? 2 : 1, Math.max(1, Math.round((h - 0.06) / 0.22)), 0.05, d / 2 - 0.01, 'h');
   },
-  kitchen(b, w, d, h) {
+  kitchen(b, w, d, h, o = {}) {
     const t = 0.04, H = h - t, D = d - 0.04, zc = -0.02;
     carcass(b, w, H, D, zc, 0.018, 0.1);
-    b.box(w - 0.036, 0.018, D - 0.012, 0, 0.1 + (H - 0.1) / 2, zc + 0.004);
+    b.box(w - 0.036, 0.018, D - 0.012, 0, PV(o.p, 'shelf', KSHELF[0](h), KSHELF[1](h), KSHELF[2](h)), zc + 0.004);
     fronts(b, w, h - t - 0.1, d, Math.max(1, Math.round(w / 0.6)), 1, 0.1, d / 2 - 0.03, 'v');
     b.box(w, t, d, 0, h - t, 0, b.m2);
   },
-  fridge(b, w, d, h) {
-    const split = h * 0.62, D = d - 0.03, zc = -0.015, t = 0.03;
+  fridge(b, w, d, h, o = {}) {
+    const split = PV(o.p, 'split', h * 0.62, 0.4, h - 0.25), D = d - 0.03, zc = -0.015, t = 0.03;
     carcass(b, w, h, D, zc, t, t);
     b.box(w - 2 * t, t, D - 0.012, 0, split - t / 2, zc + 0.004);
     for (const y of [split * 0.33, split * 0.66, split + (h - split) / 2])
@@ -280,23 +320,23 @@ const BUILD = {
       b.box(0.016, 0.2, 0.02, -2 * hx + 0.05, 0.08, 0.025, b.m2);
     });
   },
-  shelf(b, w, d, h) {
+  shelf(b, w, d, h, o = {}) {
     const t = 0.02;
     for (const s of [-1, 1]) b.box(t, h, d, s * (w / 2 - t / 2), 0, 0);
     b.box(w - 2 * t, h, 0.008, 0, 0, -d / 2 + 0.004, b.m2);
-    const n = Math.max(1, Math.round(h / 0.35));
+    const n = shelfGap(h, o.p).n;
     for (let i = 0; i <= n; i++) b.box(w - 2 * t, t, d - 0.008, 0, i * (h - t) / n, 0.004);
   },
-  table(b, w, d, h) {
+  table(b, w, d, h, o = {}) {
     const t = 0.04;
     b.box(w, t, d, 0, h - t, 0);
-    legs(b, w, d, h - t, 0.05, 0.03);
+    legs(b, w, d, h - t, 0.05, PV(o.p, 'inset', 0.03, 0, Math.min(w, d) / 2 - 0.1));
   },
-  desk(b, w, d, h) {
-    const t = 0.03;
+  desk(b, w, d, h, o = {}) {
+    const t = 0.03, sd = PV(o.p, 'side', 0.04, 0.0125, w / 2 - 0.2);
     b.box(w, t, d, 0, h - t, 0);
-    for (const s of [-1, 1]) b.box(0.025, h - t, d - 0.06, s * (w / 2 - 0.04), 0, 0, b.m2);
-    b.box(w - 0.105, (h - t) * 0.4, 0.018, 0, (h - t) * 0.5, -d / 2 + 0.06, b.m2);
+    for (const s of [-1, 1]) b.box(0.025, h - t, d - 0.06, s * (w / 2 - sd), 0, 0, b.m2);
+    b.box(w - 2 * sd - 0.025, (h - t) * 0.4, 0.018, 0, (h - t) * 0.5, -d / 2 + 0.06, b.m2);
   },
   roundtable(b, w, d, h) {
     const t = 0.035;
@@ -311,13 +351,14 @@ const BUILD = {
     for (const s of [-1, 1]) b.box(leg, h - sh, leg, s * lx, sh, -lz, b.m2);
     b.box(w - 2 * leg, (h - sh) * 0.5, 0.02, 0, sh + (h - sh) * 0.45, -lz, b.m3);
   },
-  stool(b, w, d, h) {
+  stool(b, w, d, h, o = {}) {
+    const bar = PV(o.p, 'bar', h * 0.3, 0.05, h - 0.08);
     const st = 0.03, leg = 0.035, inset = 0.02;
     b.box(w, st, d, 0, h - st, 0);
     const { lx, lz } = legs(b, w, d, h - st, leg, inset);
     for (const s of [-1, 1]) {
-      b.box(2 * lx - leg, 0.02, 0.02, 0, h * 0.3, s * lz, b.m2);
-      b.box(0.02, 0.02, 2 * lz - leg, s * lx, h * 0.3, 0, b.m2);
+      b.box(2 * lx - leg, 0.02, 0.02, 0, bar, s * lz, b.m2);
+      b.box(0.02, 0.02, 2 * lz - leg, s * lx, bar, 0, b.m2);
     }
   },
   sofa,
@@ -331,23 +372,24 @@ const BUILD = {
     b.box(w - 0.2 - cw, 0.12, dd - bk - 0.02, -w / 2 + 0.19 + (w - 0.2 - cw) / 2, bh, -d / 2 + bk + (dd - bk) / 2, b.m3);
     b.box(cw - 0.02, 0.12, d - bk - 0.02, w / 2 - cw / 2, bh, -d / 2 + bk + (d - bk) / 2, b.m3);
   },
-  bench(b, w, d, h) {
+  bench(b, w, d, h, o = {}) {
     b.box(w, 0.04, d, 0, h - 0.04, 0);
     for (const s of [-1, 1]) b.box(0.04, h - 0.04, d - 0.04, s * (w / 2 - 0.1), 0, 0, b.m2);
-    b.box(w - 0.24, 0.03, 0.03, 0, h * 0.35, 0, b.m2);
+    b.box(w - 0.24, 0.03, 0.03, 0, PV(o.p, 'bar', h * 0.35, 0.05, h - 0.08), 0, b.m2);
   },
-  barstool(b, w, d, h) {
+  barstool(b, w, d, h, o = {}) {
+    const bar = PV(o.p, 'bar', h * 0.32, 0.05, h - 0.08);
     b.cyl(0.5, 0.5, 0.04, 0, h - 0.04, 0, b.m, w, d);
     const { lx, lz } = legs(b, w, d, h - 0.04, 0.03, 0.05);
     for (const s of [-1, 1]) {
-      b.box(2 * lx - 0.03, 0.02, 0.02, 0, h * 0.32, s * lz, b.m2);
-      b.box(0.02, 0.02, 2 * lz - 0.03, s * lx, h * 0.32, 0, b.m2);
+      b.box(2 * lx - 0.03, 0.02, 0.02, 0, bar, s * lz, b.m2);
+      b.box(0.02, 0.02, 2 * lz - 0.03, s * lx, bar, 0, b.m2);
     }
   },
-  coffeetable(b, w, d, h) {
+  coffeetable(b, w, d, h, o = {}) {
     b.box(w, 0.03, d, 0, h - 0.03, 0);
     legs(b, w, d, h - 0.03, 0.04, 0.02);
-    b.box(w - 0.14, 0.02, d - 0.14, 0, h * 0.3, 0, b.m3);
+    b.box(w - 0.14, 0.02, d - 0.14, 0, PV(o.p, 'shelf', TSHELF[0](h), TSHELF[1](h), TSHELF[2](h)), 0, b.m3);
   },
   pouf(b, w, d, h) {
     b.cyl(0.5, 0.5, h - 0.012, 0, 0, 0, b.m, w, d);
@@ -480,20 +522,20 @@ const BUILD = {
     b.finish(new THREE.Mesh(geo, b.m));
   },
   bed1(b, w, d, h, o) { BUILD.bed(b, w, d, h, o); },
-  bunk(b, w, d, h) {                     // двухъярусная кровать с лестницей
-    const p = 0.06, white = std('#f4f1ea');
+  bunk(b, w, d, h, o = {}) {             // двухъярусная кровать с лестницей
+    const p = 0.06, white = std('#f4f1ea'), up = PV(o.p, 'up', h * 0.62, 0.8, h - 0.45), low = PV(o.p, 'low', 0.25, 0.1, up - 0.55);
     for (const sx of [-1, 1]) for (const sz of [-1, 1]) b.box(p, h, p, sx * (w / 2 - p / 2), 0, sz * (d / 2 - p / 2), b.m2);
-    for (const y of [0.25, h * 0.62]) {
+    for (const y of [low, up]) {
       b.box(w - 2 * p, 0.12, d - 2 * p, 0, y, 0);
       b.box(w - 2 * p - 0.04, 0.14, d - 2 * p - 0.04, 0, y + 0.12, 0, white);
       b.box(w * 0.6, 0.08, 0.34, 0, y + 0.26, -d / 2 + p + 0.24, b.m3);
       for (const sz of [-1, 1]) b.box(w - 2 * p, 0.04, 0.03, 0, y + 0.42, sz * (d / 2 - p / 2));
     }
-    b.box(0.03, 0.04, d - 2 * p, -w / 2 + 0.03, h * 0.62 + 0.42, 0);
-    for (const sz of [0.12, 0.5]) b.box(0.03, h * 0.62 + 0.3, 0.03, w / 2 + 0.015, 0, d / 2 - sz, b.m2);
-    for (let i = 1; i <= 4; i++) b.box(0.03, 0.03, 0.38, w / 2 + 0.015, i * (h * 0.62) / 4.4, d / 2 - 0.31, b.m2);
+    b.box(0.03, 0.04, d - 2 * p, -w / 2 + 0.03, up + 0.42, 0);
+    for (const sz of [0.12, 0.5]) b.box(0.03, up + 0.3, 0.03, w / 2 + 0.015, 0, d / 2 - sz, b.m2);
+    for (let i = 1; i <= 4; i++) b.box(0.03, 0.03, 0.38, w / 2 + 0.015, i * (up) / 4.4, d / 2 - 0.31, b.m2);
   },
-  lowshelf(b, w, d, h) { BUILD.shelf(b, w, d, h); },
+  lowshelf(b, w, d, h, o) { BUILD.shelf(b, w, d, h, o); },
   lowwall(b, w, d, h) { b.box(w, h, d); },
   column(b, w, d, h) {
     b.box(w, 0.12, d, 0, 0, 0); b.box(w, 0.1, d, 0, h - 0.1, 0);
@@ -570,16 +612,16 @@ const BUILD = {
       b.box(0.1, 0.03, 0.015, 0, -0.02, d + 0.012, b.m2);
     });
   },
-  sideboard(b, w, d, h) {                // буфет: внизу дверцы, сверху ряд ящиков
+  sideboard(b, w, d, h, o = {}) {        // буфет: внизу дверцы, сверху ряд ящиков
     carcass(b, w, h, d - 0.02, -0.01, 0.018, 0.05);
-    const dr = Math.min(0.18, h * 0.22), cols = Math.max(2, Math.round(w / 0.45));
+    const dr = PV(o.p, 'dr', Math.min(0.18, h * 0.22), 0.08, h * 0.5), cols = Math.max(2, Math.round(w / 0.45));
     b.box(w - 0.036, 0.018, d - 0.032, 0, h - 0.02 - dr - 0.018, -0.006);
     fronts(b, w, h - 0.07 - dr, d, cols, 1, 0.05, d / 2 - 0.01, 'v');
     fronts(b, w, dr, d, cols, 1, h - 0.02 - dr, d / 2 - 0.01, 'h');
   },
-  wallcabinet(b, w, d, h) {
+  wallcabinet(b, w, d, h, o = {}) {
     carcass(b, w, h, d - 0.02, -0.01, 0.018, 0.018);
-    b.box(w - 0.036, 0.018, d - 0.032, 0, h / 2, -0.006);
+    b.box(w - 0.036, 0.018, d - 0.032, 0, PV(o.p, 'shelf', CSHELF[0](h), CSHELF[1](h), CSHELF[2](h)), -0.006);
     fronts(b, w, h - 0.02, d, Math.max(1, Math.round(w / 0.45)), 1, 0.01, d / 2 - 0.01, 'v');
   },
   // ── техника и сантехника ──
