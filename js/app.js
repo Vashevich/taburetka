@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=23';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=24';
 
 const STORE = 'taburetka.project.v1';
 
@@ -838,7 +838,7 @@ function viewHeightAt(obj) {
 function updateConstSize() {
   for (const h of handles) if (h.userData.cs) h.scale.setScalar(h.userData.cs * viewHeightAt(h));
   for (const a of arrows) a.scale.setScalar((coarse ? 0.16 : 0.12) * viewHeightAt(a));
-  if (cutMarker.visible) cutMarker.scale.setScalar((coarse ? 0.014 : 0.009) * viewHeightAt(cutMarker));
+  for (const cm2 of [cutMarker, cutMarkerA]) if (cm2.visible) cm2.scale.setScalar((coarse ? 0.014 : 0.009) * viewHeightAt(cm2));
   if (snapMarker.visible) snapMarker.scale.setScalar((snapMarker.userData.cs || 0.01) * viewHeightAt(snapMarker));
   // Таблички размеров: на экране — постоянный экранный размер, лицом к камере;
   // в шлеме — постоянный настоящий размер, строго вертикально, поворачиваются к зрителю только вокруг вертикали.
@@ -1164,6 +1164,10 @@ function findCut() {
     ray.ray.distanceSqToSegment(A, B, undefined, ps);
     const t = A.distanceTo(ps) / len, local = world.worldToLocal(ps.clone()), dpx = pxDist(local);
     if (dpx < bd && t > 0.04 && t < 0.96) { bd = dpx; best = { a, b, t: Math.round(t * 100) / 100, p: local }; }
+  }
+  if (best && cutA) {                   // вторая точка липнет к положению «ровно напротив первой» — разрез выходит прямым
+    const A = mv(best.a), d = mv(best.b).sub(A), tt = clamp(cutA.p.clone().sub(A).dot(d) / d.lengthSq(), 0.04, 0.96);
+    if (Math.abs(tt - best.t) < 0.06) best.t = tt;
   }
   if (best) best.p = mv(best.a).lerp(mv(best.b), best.t);
   return best;
