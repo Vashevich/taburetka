@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=16';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=17';
 
 const STORE = 'taburetka.project.v1';
 
@@ -94,7 +94,8 @@ function normalize(d) {
       w: clamp(num(room.w, 4), 0.5, 50), d: clamp(num(room.d, 5), 0.5, 50), h: clamp(num(room.h, 2.7), 0.5, 20),
       floor: room.floor || '#d9c7a8', wall: room.wall || '#f4f1ea',
       ...(validCeil(room.ceil) ? { ceil: JSON.parse(JSON.stringify(room.ceil)) } : {}),
-      ...(room.sun && Number.isFinite(room.sun.az) && Number.isFinite(room.sun.el) ? { sun: { az: room.sun.az, el: room.sun.el } } : {}),
+      ...(room.sun && [room.sun.x, room.sun.y, room.sun.z].every(Number.isFinite) ? { sun: { x: room.sun.x, y: room.sun.y, z: room.sun.z } }
+        : room.sun && Number.isFinite(room.sun.az) && Number.isFinite(room.sun.el) ? { sun: { az: room.sun.az, el: room.sun.el } } : {}),
     },
     snap: num(d.snap, 0.05),
     dims: Array.isArray(d.dims) ? d.dims.filter((m) => m && m.a && m.b) : [],
@@ -219,13 +220,16 @@ function resetCeil() {
   buildRoom(); updateGizmo(); commit();
 }
 // Направление света хранится в комнате: азимут и высота солнца над горизонтом.
-function sunDir() {
-  const q = state.room.sun || { az: 0.695, el: 0.856 };
-  return { az: q.az, el: clamp(q.el, 0.12, 1.5) };
+function sunPos() {                      // точка над комнатой, из которой светит солнце
+  const q = state.room.sun, R = state.room;
+  if (q && Number.isFinite(q.x)) return new THREE.Vector3(q.x, q.y, q.z);
+  const az = q ? q.az : 0.695, el = clamp(q ? q.el : 0.856, 0.12, 1.5), y = R.h + 0.8, r = clamp(y / Math.tan(el), 0.3, 14);
+  return new THREE.Vector3(r * Math.sin(az), y, r * Math.cos(az));
 }
 function applySun() {
-  const { az, el } = sunDir(), r = 14;
-  sun.position.set(r * Math.cos(el) * Math.sin(az), r * Math.sin(el), r * Math.cos(el) * Math.cos(az));
+  const p = sunPos();
+  if (p.lengthSq() < 1e-4) p.set(0, 1, 0);
+  sun.position.copy(p.normalize().multiplyScalar(14));
   sun.target.position.set(0, 0, 0);
 }
 function buildRoom() {
@@ -653,9 +657,10 @@ function addArrows(hold, axes) {         // стрелки перемещени�
 }
 // Выделенная точка или грань потолка: что двигает стрелка по каждой оси.
 let roomSel = null;                     // { n: [[i, j], …] }
-const roomKey = (n) => n.map((q) => q.join(':')).join('|');
+const roomKey = (n) => (n || []).map((q) => q.join(':')).join('|');
 function roomArrowTarget(axis) {
   if (!roomSel) return null;
+  if (roomSel.sun) return { room: 'sunAxis', axis };
   const n = roomSel.n, G = ceilGrid();
   if (axis === 'y') return { room: 'node', n };
   const c = axis === 'x' ? 0 : 1, last = (axis === 'x' ? G.X.length : G.Z.length) - 1, i = n[0][c];
@@ -683,7 +688,7 @@ function updateGizmo() {
     gizmo.position.set(0, 0, 0);
     gizmo.rotation.y = 0;
     const G = ceilGrid(), nx = G.X.length - 1, nz = G.Z.length - 1, R = state.room;
-    const key = roomSel ? roomKey(roomSel.n) : '';
+    const key = roomSel && roomSel.n ? roomKey(roomSel.n) : '';
     let selPos = null;
     const mk = (x, y, z, data, col, cs, dir) => {
       const picked = data.n && roomKey(data.n) === key;
@@ -709,9 +714,9 @@ function updateGizmo() {
       }
     }
     {                                   // солнце: тяните — меняется направление света и теней
-      const q = sunDir(), y0 = R.h + 0.8, rr = clamp(y0 / Math.tan(q.el), 0.3, 14);
-      const sx = rr * Math.sin(q.az), sz = rr * Math.cos(q.az);
-      mk(sx, y0, sz, { room: 'sun' }, 0xffb300, 0.02);
+      const sp = sunPos(), sx = sp.x, y0 = sp.y, sz = sp.z;
+      mk(sx, y0, sz, { room: 'sun' }, roomSel && roomSel.sun ? 0xa61e1e : 0xffb300, 0.02);
+      if (roomSel && roomSel.sun) selPos = sp.clone();
       const ln = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(sx, y0, sz), new THREE.Vector3(0, 0, 0)]),
         new THREE.LineDashedMaterial({ color: 0xffb300, dashSize: 0.12, gapSize: 0.08, depthTest: false, transparent: true }));
       ln.computeLineDistances();
@@ -1030,7 +1035,8 @@ function beginDrag(lr, direct) {
       direct = false;
       if (!u || !a0) return null;
     }
-    const d = { mode: 'room', h: u, a0, direct, s0: u.room === 'node' ? axisParam(lr, a0, AXES.y) : null,
+    const d = { mode: 'room', h: u, a0, direct, p0: sunPos(),
+      s0: u.room === 'node' ? axisParam(lr, a0, AXES.y) : u.room === 'sunAxis' ? axisParam(lr, a0, AXES[u.axis]) : null,
       h0: u.room === 'node' ? u.n.map(([i, j]) => G.H[i][j]) : null };
     if (u.room === 'wall') {            // запоминаем всё, что сдвинется вместе с центром комнаты
       const R = state.room;
@@ -1079,12 +1085,18 @@ function updateRoomDrag(d, lr) {
     if (d.s0 === null) { d.s0 = sp; return false; }
     const c = ensureCeil();
     u.n.forEach(([i, j], k) => { c.h[i][j] = r3(clamp(sn(d.h0[k] + sp - d.s0), 0, 12)); });
+  } else if (u.room === 'sunAxis') {    // солнце по стрелке: одна координата
+    const sp = axisParam(lr, d.a0, AXES[u.axis]);
+    if (sp === null) return false;
+    if (d.s0 === null) { d.s0 = sp; return false; }
+    const q = d.p0.clone();
+    q[u.axis] = Math.round(clamp(q[u.axis] + sp - d.s0, u.axis === 'y' ? 0.3 : -15, 15) * 20) / 20;
+    R.sun = { x: q.x, y: q.y, z: q.z };
   } else {
     const p = hitPlaneY(lr, d.a0.y);
     if (!p) return false;
     if (u.room === 'sun') {             // солнце ездит по плоскости над комнатой: азимут и высота
-      const rr = clamp(Math.hypot(p.x, p.z), 0.3, 14), r4 = (v) => Math.round(v * 1e4) / 1e4;
-      R.sun = { az: r4(Math.atan2(p.x, p.z)), el: r4(Math.atan2(d.a0.y, rr)) };
+      R.sun = { x: r3(clamp(p.x, -15, 15)), y: r3(d.a0.y), z: r3(clamp(p.z, -15, 15)) };
     } else if (u.room === 'split') {    // линия излома — вдоль стены; у соседней линии или стены она исчезает
       const arr = u.axis === 'x' ? R.ceil.xs : R.ceil.zs, size = u.axis === 'x' ? R.w : R.d, gap = 0.1 / size;
       arr[u.k] = Math.round(clamp((sn(p[u.axis]) + size / 2) / size, (arr[u.k - 1] ?? 0) + gap, (arr[u.k + 1] ?? 1) - gap) * 1e4) / 1e4;
@@ -1114,6 +1126,7 @@ function updateRoomDrag(d, lr) {
 }
 function endRoomDrag(d) {               // нажатие без движения по шарику грани — излом; линия у края — убрать
   if (!d.changed) {                     // нажатие без движения: выделить; по уже выделенной грани — излом
+    if (d.direct && d.h.room === 'sun') { roomSel = roomSel && roomSel.sun ? null : { sun: true }; updateGizmo(); return; }
     if (!d.direct || d.h.room !== 'node') return;
     const same = roomSel && roomKey(roomSel.n) === roomKey(d.h.n);
     if (same && d.h.n.length === 2) { roomSel = null; splitByEdge(d.h); } else { roomSel = same ? null : { n: d.h.n }; updateGizmo(); }
@@ -1292,7 +1305,7 @@ canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 // ───────────────────────── интерфейс ─────────────────────────
 const HINTS = {
   select: 'Тащите предмет: он встаёт на пол или на другую мебель, у стены — поднимается по ней',
-  room: 'Комната: шарик на стене двигает эту стену. Точка или чёрточка-грань потолка: тянуть — вверх-вниз, нажать — стрелки по осям, нажать выделенную грань ещё раз — излом. Жёлтое солнце над комнатой — направление света',
+  room: 'Комната: шарик на стене двигает эту стену. Точка или чёрточка-грань потолка: тянуть — вверх-вниз, нажать — стрелки по осям, нажать выделенную грань ещё раз — излом. Жёлтое солнце: нажмите — появятся стрелки, ими ставится направление света',
   erase: 'Ластик: наведите на предмет или размер — он станет красным — и нажмите, чтобы удалить',
   act: 'Нажимайте на дверцы и ящики — они открываются и закрываются',
   move3d: 'Тащите стрелку: красная и зелёная — вдоль пола, синяя — вверх-вниз',
@@ -1679,7 +1692,7 @@ function vmDraw() {
     x.font = '20px "PT Mono", ui-monospace, monospace'; x.fillStyle = '#5a5147';
     x.fillText(`${cm(R.w)} × ${cm(R.d)} × ${cm(R.h)} см`, 24, 180);
     x.font = 'italic 22px "PT Serif", Georgia, serif'; x.fillStyle = '#5a5147'; x.textAlign = 'left';
-    ['Шарик на стене: тяните — двигается эта стена.', '', 'Точка или чёрточка-грань на потолке:', 'тяните — вверх или вниз;', 'нажмите — появятся стрелки по осям;', 'нажмите выделенную грань ещё раз — излом.', '', 'Жёлтый шарик у пола двигает линию излома;', 'у стены или соседней линии она исчезает.', '', 'Жёлтое солнце над комнатой — тяните его,', 'чтобы повернуть свет и тени.']
+    ['Шарик на стене: тяните — двигается эта стена.', '', 'Точка или чёрточка-грань на потолке:', 'тяните — вверх или вниз;', 'нажмите — появятся стрелки по осям;', 'нажмите выделенную грань ещё раз — излом.', '', 'Жёлтый шарик у пола двигает линию излома;', 'у стены или соседней линии она исчезает.', '', 'Жёлтое солнце: нажмите — появятся стрелки,', 'ими выставляется свет и тени.']
       .forEach((t, i) => x.fillText(t, 24, 236 + i * 36));
   } else {
   let chx = 20, chy = 116;
