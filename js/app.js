@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=20';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=21';
 
 const STORE = 'taburetka.project.v1';
 
@@ -1036,6 +1036,7 @@ function measurePoint() {
 let drag = null, down = null;
 
 function startDrag(d, e) {
+  showCut(null);
   drag = d;
   d.pid = e.pointerId;
   d.changed = false;
@@ -1966,7 +1967,7 @@ function xrSelectStart(c, R) {
   if (tool === 'erase') { doErase(eraseTarget()); return; }
   if (tool === 'act') { const pk = pickItem(); if (pk) tapPart(pk); return; }
   const d = beginDrag(localRay(R), false);
-  if (d) { d.t0 = performance.now(); c.userData.grab = d; return; }
+  if (d) { d.t0 = performance.now(); c.userData.grab = d; showCut(null); return; }
   if (tool === 'room') { const ct = findCut(); if (ct) doCut(ct); else if (roomSel) { roomSel = null; updateGizmo(); } return; }
   const pk = pickItem();
   select(pk ? pk.id : null);
