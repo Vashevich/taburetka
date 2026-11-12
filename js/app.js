@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=10';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=11';
 
 const STORE = 'taburetka.project.v1';
 
@@ -79,6 +79,11 @@ function demo() {
   };
 }
 
+function validCeil(c) {
+  const fr = (a) => Array.isArray(a) && a.length <= 6 && a.every((f, i) => typeof f === 'number' && f > 0 && f < 1 && (i === 0 || f > a[i - 1]));
+  return !!c && fr(c.xs) && fr(c.zs) && Array.isArray(c.h) && c.h.length === c.xs.length + 2
+    && c.h.every((col) => Array.isArray(col) && col.length === c.zs.length + 2 && col.every((v) => Number.isFinite(v) && v >= 0 && v <= 20));
+}
 function normalize(d) {
   const num = (v, def) => (Number.isFinite(+v) ? +v : def);
   const room = d.room || {};
@@ -86,6 +91,7 @@ function normalize(d) {
     room: {
       w: clamp(num(room.w, 4), 0.5, 50), d: clamp(num(room.d, 5), 0.5, 50), h: clamp(num(room.h, 2.7), 0.5, 20),
       floor: room.floor || '#d9c7a8', wall: room.wall || '#f4f1ea',
+      ...(validCeil(room.ceil) ? { ceil: JSON.parse(JSON.stringify(room.ceil)) } : {}),
     },
     snap: num(d.snap, 0.05),
     dims: Array.isArray(d.dims) ? d.dims.filter((m) => m && m.a && m.b) : [],
@@ -155,9 +161,55 @@ function disposeChildren(g) {
   g.userData.shared = false;
 }
 
+// Потолок — сетка высот: линии излома вдоль и поперёк комнаты (доли 0..1) и высота в каждом узле.
+// Без изломов это обычная коробка высотой room.h.
+function ceilGrid() {
+  const R = state.room, c = R.ceil;
+  const X = [0, ...(c ? c.xs : []), 1].map((f) => -R.w / 2 + f * R.w), Z = [0, ...(c ? c.zs : []), 1].map((f) => -R.d / 2 + f * R.d);
+  return { X, Z, H: X.map((_, i) => Z.map((__, j) => (c ? c.h[i][j] : R.h))) };
+}
+function ensureCeil() {
+  const R = state.room;
+  if (!R.ceil) R.ceil = { xs: [], zs: [], h: [[R.h, R.h], [R.h, R.h]] };
+  return R.ceil;
+}
+function ceilAt(x, z) {                 // высота потолка над точкой пола
+  const G = ceilGrid(), nx = G.X.length - 1, nz = G.Z.length - 1;
+  x = clamp(x, G.X[0], G.X[nx]); z = clamp(z, G.Z[0], G.Z[nz]);
+  let i = 0, j = 0;
+  while (i < nx - 1 && x > G.X[i + 1]) i++;
+  while (j < nz - 1 && z > G.Z[j + 1]) j++;
+  const u = (x - G.X[i]) / (G.X[i + 1] - G.X[i] || 1), v = (z - G.Z[j]) / (G.Z[j + 1] - G.Z[j] || 1);
+  const h00 = G.H[i][j], h10 = G.H[i + 1][j], h11 = G.H[i + 1][j + 1], h01 = G.H[i][j + 1];
+  return u >= v ? h00 + u * (h10 - h00) + v * (h11 - h10) : h00 + u * (h11 - h01) + v * (h01 - h00);
+}
+function ceilMin(it, x, z) {            // самая низкая точка потолка над предметом
+  const c = Math.cos(it.rot), sn = Math.sin(it.rot);
+  let m = ceilAt(x, z);
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    const lx = (sx * it.w) / 2, lz = (sz * it.d) / 2;
+    m = Math.min(m, ceilAt(x + lx * c + lz * sn, z - lx * sn + lz * c));
+  }
+  return m;
+}
+function splitCeil(axis) {              // новая линия излома посередине самого широкого участка
+  const c = ensureCeil(), arr = axis === 'x' ? c.xs : c.zs, f = [0, ...arr, 1];
+  if (arr.length >= 6) { toast('Изломов по этому направлению уже достаточно'); return; }
+  let k = 0;
+  for (let i = 1; i < f.length - 1; i++) if (f[i + 1] - f[i] > f[k + 1] - f[k]) k = i;
+  arr.splice(k, 0, Math.round(((f[k] + f[k + 1]) / 2) * 1e4) / 1e4);
+  if (axis === 'x') c.h.splice(k + 1, 0, c.h[k].map((v, j) => r3((v + c.h[k + 1][j]) / 2)));
+  else for (const col of c.h) col.splice(k + 1, 0, r3((col[k] + col[k + 1]) / 2));
+  buildRoom(); updateGizmo(); commit();
+}
+function resetCeil() {
+  delete state.room.ceil;
+  buildRoom(); updateGizmo(); commit();
+}
 function buildRoom() {
   disposeChildren(roomG);
-  const { w, d, h, floor, wall } = state.room;
+  const { w, d, floor, wall } = state.room;
+  if (state.room.ceil) state.room.h = Math.max(...state.room.ceil.h.flat());
   floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshStandardMaterial({ color: floor, roughness: 0.95 }));
   floorMesh.rotation.x = -Math.PI / 2;
   floorMesh.receiveShadow = true;
@@ -169,14 +221,23 @@ function buildRoom() {
     new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.1 }));
   gridLines.position.y = 0.003;
 
-  const wm = new THREE.MeshStandardMaterial({ color: wall, roughness: 1, side: THREE.BackSide });
-  const none = new THREE.MeshBasicMaterial({ visible: false });
-  const boxGeo = new THREE.BoxGeometry(w, h, d);
-  wallMesh = new THREE.Mesh(boxGeo, [wm, wm, wm, none, wm, wm]);   // изнутри видно, снаружи — прозрачно
-  wallMesh.position.y = h / 2;
+  // стены и потолок одной сеткой: грани смотрят внутрь, поэтому снаружи комната прозрачна
+  const G = ceilGrid(), nx = G.X.length - 1, nz = G.Z.length - 1, pos = [], inside = new THREE.Vector3(0, 0.2, 0);
+  const P = (i, j, top = true) => new THREE.Vector3(G.X[i], top ? G.H[i][j] : 0, G.Z[j]);
+  const tri = (a, b, c) => {
+    const n = b.clone().sub(a).cross(c.clone().sub(a));
+    if (n.lengthSq() < 1e-10) return;
+    if (n.dot(inside.clone().sub(a)) < 0) [b, c] = [c, b];
+    pos.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+  };
+  for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) { tri(P(i, j), P(i + 1, j), P(i + 1, j + 1)); tri(P(i, j), P(i + 1, j + 1), P(i, j + 1)); }
+  for (let i = 0; i < nx; i++) for (const j of [0, nz]) { tri(P(i, j, 0), P(i + 1, j, 0), P(i + 1, j)); tri(P(i, j, 0), P(i + 1, j), P(i, j)); }
+  for (let j = 0; j < nz; j++) for (const i of [0, nx]) { tri(P(i, j, 0), P(i, j + 1, 0), P(i, j + 1)); tri(P(i, j, 0), P(i, j + 1), P(i, j)); }
+  const shell = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  shell.computeVertexNormals();
+  wallMesh = new THREE.Mesh(shell, new THREE.MeshStandardMaterial({ color: wall, roughness: 1 }));
   wallMesh.receiveShadow = true;
-  wallEdges = new THREE.LineSegments(new THREE.EdgesGeometry(boxGeo), EDGE);
-  wallEdges.position.y = h / 2;
+  wallEdges = new THREE.LineSegments(new THREE.EdgesGeometry(shell, 1), EDGE);
 
   const o = [-w / 2, 0, -d / 2, w / 2, 0, -d / 2, w / 2, 0, d / 2, -w / 2, 0, d / 2];
   outline = new THREE.LineLoop(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(o, 3)),
@@ -264,7 +325,7 @@ function restY(it, x, z) {
   let level = 0;                        // если предмет не помещается под опорой — он встаёт на неё
   for (const [o, top] of [...tops].sort((a, b) => a[0].y - b[0].y))
     if (o.y - level < it.h - 1e-3) level = Math.max(level, top);
-  if (level + it.h > state.room.h + 1e-3) level = 0;
+  if (level + it.h > ceilMin(it, x, z) + 1e-3) level = 0;
   return r3(Math.max(0, level));
 }
 function topOf(group, x, z) {            // высота верхней поверхности предмета в точке (x, z)
@@ -317,7 +378,7 @@ function dragMove(it, g, lr) {
   let x = 0, z = 0, p = null, ceil = false, stackY = null;
   if (!g.float && it.type !== 'rug') {  // курсор на верхней грани другого предмета — ставим на неё
     const t = topUnder(it, lr);
-    if (t && t.y + it.h <= R.h + 1e-3) {
+    if (t && t.y + it.h <= ceilMin(it, t.x, t.z) + 1e-3) {
       const pp = hitPlaneY(lr, t.y + g.rel), cand = [];
       if (pp) cand.push([pp.x + g.off.x, pp.z + g.off.z]);
       cand.push([t.x + g.off.x, t.z + g.off.z], [t.x, t.z]);
@@ -366,7 +427,8 @@ function dragMove(it, g, lr) {
     const dead = g.float ? 0.05 : 0.35;   // стоящий на полу предмет отрывается не сразу
     y = climb < rest + dead ? rest : Math.round(climb / state.snap) * state.snap;
   }
-  if (R.h >= it.h && (ceil || y + it.h > R.h - 0.06)) y = R.h - it.h;
+  const ch = ceilMin(it, x, z);         // потолок может быть наклонным
+  if (ch >= it.h && (ceil || y + it.h > ch - 0.06)) y = ch - it.h;
   it.x = r3(x); it.z = r3(z); it.y = r3(Math.max(0, y));
   g.base = g.float ? it.y : rest;
   return true;
@@ -542,6 +604,32 @@ function updateGizmo() {
     c.traverse((o) => { o.geometry?.dispose(); if (o.material && o.material !== SEL) o.material.dispose(); });
   }
   handles = []; arrows = [];
+  if (tool === 'room') {                // ручки комнаты: потолок, линии излома, стены
+    gizmo.visible = true;
+    gizmo.position.set(0, 0, 0);
+    gizmo.rotation.y = 0;
+    const G = ceilGrid(), nx = G.X.length - 1, nz = G.Z.length - 1, R = state.room;
+    const mk = (x, y, z, data, col, cs) => {
+      const hm = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color: col, depthTest: false, transparent: true }));
+      hm.position.set(x, y, z);
+      hm.renderOrder = 11;
+      hm.userData = { ...data, cs: cs * (coarse ? 1.6 : 1), mat: hm.material, col };
+      gizmo.add(hm);
+      handles.push(hm);
+    };
+    for (let i = 0; i <= nx; i++) for (let j = 0; j <= nz; j++) {
+      mk(G.X[i], G.H[i][j], G.Z[j], { room: 'node', n: [[i, j]] }, 0x1f6feb, 0.008);
+      if (i < nx) mk((G.X[i] + G.X[i + 1]) / 2, (G.H[i][j] + G.H[i + 1][j]) / 2, G.Z[j], { room: 'node', n: [[i, j], [i + 1, j]] }, 0x1f6feb, 0.013);
+      if (j < nz) mk(G.X[i], (G.H[i][j] + G.H[i][j + 1]) / 2, (G.Z[j] + G.Z[j + 1]) / 2, { room: 'node', n: [[i, j], [i, j + 1]] }, 0x1f6feb, 0.013);
+    }
+    for (let i = 1; i < nx; i++) for (const z of [G.Z[0], G.Z[nz]]) mk(G.X[i], 0.02, z, { room: 'split', axis: 'x', k: i - 1 }, 0xc9963b, 0.012);
+    for (let j = 1; j < nz; j++) for (const x of [G.X[0], G.X[nx]]) mk(x, 0.02, G.Z[j], { room: 'split', axis: 'z', k: j - 1 }, 0xc9963b, 0.012);
+    for (const sg of [-1, 1]) {
+      mk((sg * R.w) / 2, 0.6, 0, { room: 'wall', axis: 'x' }, HCOL.x, 0.013);
+      mk(0, 0.6, (sg * R.d) / 2, { room: 'wall', axis: 'z' }, HCOL.z, 0.013);
+    }
+    return;
+  }
   const it = sel();
   gizmo.visible = !!it;
   if (!it) return;
@@ -805,7 +893,9 @@ function measurePoint() {
   const corners = [];
   for (const it of state.items) corners.push(...itemPoints(it));
   for (const x of [-R.w / 2, R.w / 2]) for (const z of [-R.d / 2, R.d / 2])
-    corners.push(new THREE.Vector3(x, 0, z), new THREE.Vector3(x, R.h, z));
+    corners.push(new THREE.Vector3(x, 0, z));
+  const CG = ceilGrid();
+  CG.X.forEach((x, i) => CG.Z.forEach((z, j) => corners.push(new THREE.Vector3(x, CG.H[i][j], z))));
   for (const m of state.dims) corners.push(dimEnd(m, 'a'), dimEnd(m, 'b'));
   const c = nearest(corners, lim);
   if (c) return { p: c.clone(), kind: 'corner', id: c.itemId };
@@ -841,6 +931,13 @@ function onDown(e) {
 }
 // Начало перетаскивания лучом ray (мышь, палец или контроллер). direct — можно тащить невыделенный предмет.
 function beginDrag(lr, direct) {
+  if (tool === 'room') {
+    const h = pickHandle();
+    if (!h) return null;
+    const G = ceilGrid(), u = h.userData;
+    return { mode: 'room', h: u, a0: h.position.clone(), s0: u.room === 'node' ? axisParam(lr, h.position, AXES.y) : null,
+      h0: u.room === 'node' ? u.n.map(([i, j]) => G.H[i][j]) : null };
+  }
   const it = sel();
   if (it && !it.lock && (tool === 'pull' || tool === 'move3d')) {
     const h = pickHandle();
@@ -869,7 +966,28 @@ function beginDrag(lr, direct) {
   }
   return null;
 }
+function updateRoomDrag(d, lr) {
+  const R = state.room, u = d.h, st = state.snap, sn = (v) => (st > 0 ? Math.round(v / st) * st : v);
+  if (u.room === 'node') {              // грань или угол потолка — вверх-вниз
+    const sp = axisParam(lr, d.a0, AXES.y);
+    if (sp === null) return false;
+    if (d.s0 === null) { d.s0 = sp; return false; }
+    const c = ensureCeil();
+    u.n.forEach(([i, j], k) => { c.h[i][j] = r3(clamp(sn(d.h0[k] + sp - d.s0), 0, 12)); });
+  } else {
+    const p = hitPlaneY(lr, d.a0.y);
+    if (!p) return false;
+    if (u.room === 'split') {           // линия излома — вдоль стены
+      const arr = u.axis === 'x' ? R.ceil.xs : R.ceil.zs, size = u.axis === 'x' ? R.w : R.d, gap = 0.1 / size;
+      arr[u.k] = Math.round(clamp((sn(p[u.axis]) + size / 2) / size, (arr[u.k - 1] ?? 0) + gap, (arr[u.k + 1] ?? 1) - gap) * 1e4) / 1e4;
+    } else R[u.axis === 'x' ? 'w' : 'd'] = r3(2 * clamp(sn(Math.abs(p[u.axis])), 0.5, 25));   // стена — размер комнаты
+  }
+  buildRoom(); updateGizmo(); fitOrtho();
+  d.changed = true;
+  return true;
+}
 function updateDrag(d, lr) {
+  if (d.mode === 'room') return updateRoomDrag(d, lr);
   const it = item(d.id);
   if (!it) return false;
   if (d.mode === 'move') {
@@ -885,7 +1003,7 @@ function updateDrag(d, lr) {
     else if (d.axis === 'z') it.z = r3(sn(d.z0 + dl));
     else {
       let y = sn(d.y0 + dl);
-      const H = state.room.h;
+      const H = ceilMin(it, it.x, it.z);
       if (st > 0) { if (Math.abs(y) < 0.03) y = 0; if (Math.abs(y + it.h - H) < 0.06) y = H - it.h; }
       it.y = r3(y);
     }
@@ -959,12 +1077,12 @@ function onMove(e) {
   if (down && e.pointerId === down.pid && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) down.moved = true;
   if (drag) {
     if (e.pointerId !== drag.pid || !down?.moved) return;
-    if (!item(drag.id)) { drag = null; ctl().enabled = true; return; }
+    if (drag.mode !== 'room' && !item(drag.id)) { drag = null; ctl().enabled = true; return; }
     setRay(e);
     if (updateDrag(drag, localRay(ray.ray))) updateStatus();
     return;
   }
-  if ((tool === 'pull' || tool === 'move3d') && e.pointerType === 'mouse' && !down) { setRay(e); setHot(pickHandle()); }
+  if ((tool === 'pull' || tool === 'move3d' || tool === 'room') && e.pointerType === 'mouse' && !down) { setRay(e); setHot(pickHandle()); }
   if (tool === 'erase' && e.pointerType === 'mouse' && !(down && down.moved)) { setRay(e); showErase(eraseTarget()); }
   if (tool === 'measure' && e.pointerType === 'mouse' && !(down && down.moved)) {
     setRay(e);
@@ -994,6 +1112,7 @@ function onTap(e) {
   setRay(e);
   if (tool === 'measure') { measureTap(); return; }
   if (tool === 'erase') { doErase(eraseTarget()); return; }
+  if (tool === 'room') return;
   const pk = pickItem();
   if (tool === 'act') {
     if (!pk) return;
@@ -1033,6 +1152,7 @@ canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 // ───────────────────────── интерфейс ─────────────────────────
 const HINTS = {
   select: 'Тащите предмет: он встаёт на пол или на другую мебель, у стены — поднимается по ней',
+  room: 'Комната: синие шарики — грань или угол потолка (вверх-вниз), жёлтые у пола двигают линию излома, красные и зелёные — стены',
   erase: 'Ластик: наведите на предмет или размер — он станет красным — и нажмите, чтобы удалить',
   act: 'Нажимайте на дверцы и ящики — они открываются и закрываются',
   move3d: 'Тащите стрелку: красная и зелёная — вдоль пола, синяя — вверх-вниз',
@@ -1043,7 +1163,7 @@ const HINTS = {
 function updateStatus() {
   const it = sel();
   let s = HINTS[tool];
-  if (tool === 'act' || tool === 'erase') s = HINTS[tool];
+  if (tool === 'act' || tool === 'erase' || tool === 'room') s = HINTS[tool];
   else if (tool === 'measure') s = (measureA ? 'Рулетка: укажите вторую точку' : HINTS.measure) + (snapKind ? ` · привязка: ${snapKind}` : '');
   else if (it) s = `${it.name} — ${fmt(it.w)} × ${fmt(it.d)} × ${fmt(it.h)}`.replace(/ см(?= ×)/g, '');
   $('#status').textContent = s;
@@ -1055,6 +1175,9 @@ function setTool(t) {
   showSnap(null);
   showErase(null);
   vm.dirty = true;
+  if (t === 'room') selId = null;
+  $('#roomBar').hidden = t !== 'room' || renderer.xr.isPresenting;
+  updateProps();
   for (const b of $$('#tools [data-tool]')) b.classList.toggle('on', b.dataset.tool === t);
   updateGizmo(); updateStatus();
 }
@@ -1111,6 +1234,12 @@ $('#pMore').onclick = () => $('#props').classList.toggle('compact');
 if (innerWidth <= 640) $('#props').classList.add('compact');
 
 for (const b of $$('#tools [data-tool]')) b.onclick = () => setTool(b.dataset.tool);
+$('#roomBar').onclick = (e) => {
+  const a = e.target.dataset?.room;
+  if (a === 'x' || a === 'z') splitCeil(a);
+  else if (a === 'reset') resetCeil();
+  else if (a === 'size') MENU.room();
+};
 $('#btnUndo').onclick = undo;
 $('#btnRedo').onclick = redo;
 $('#btn3d').onclick = () => setView('3d');
@@ -1257,8 +1386,13 @@ $('#menu').onclick = (e) => { const a = e.target.dataset?.act; if (a) { $('#menu
 $('#roomDlg').addEventListener('close', () => {
   if ($('#roomDlg').returnValue !== 'ok') return;
   const g = (id, def) => clamp(parseFloat($(id).value) / 100 || def, 0.5, 50);
+  const oldH = state.room.h, oldCeil = state.room.ceil;
   state.room = { w: g('#rW', state.room.w), d: g('#rD', state.room.d), h: Math.min(20, g('#rH', state.room.h)),
     floor: $('#rFloor').value, wall: $('#rWall').value };
+  if (oldCeil) {                        // изломы сохраняются, высоты масштабируются
+    const k = state.room.h / oldH;
+    state.room.ceil = { xs: oldCeil.xs, zs: oldCeil.zs, h: oldCeil.h.map((col) => col.map((v) => r3(v * k))) };
+  }
   state.snap = parseFloat($('#rSnap').value) || 0;
   buildRoom(); fitOrtho(); commit();
 });
@@ -1275,6 +1409,7 @@ addEventListener('keydown', (e) => {
   else if (k === 'm' || k === 'ь') setTool('move3d');
   else if (k === 'i' || k === 'ш') setTool('act');
   else if (k === 'x' || k === 'ч') setTool('erase');
+  else if (k === 'c' || k === 'с') setTool('room');
   else if (k === 'r' || k === 'к') setTool('rotate');
   else if (k === 'p' || k === 'з') setTool('pull');
   else if (k === 't' || k === 'е') setTool('measure');
@@ -1314,6 +1449,7 @@ const TOOLS = [
   ['rotate', 'Поворот', 'M20 12a8 8 0 1 1-3-6.2M20 3v5h-5'],
   ['pull', 'Тянуть', 'M4 14h10v6H4zM9 14V4M5 8l4-4 4 4'],
   ['measure', 'Рулетка', 'M3 16L16 3l5 5L8 21zM7 12l2 2M10 9l2 2M13 6l2 2'],
+  ['room', 'Комната', 'M3 21V9l9-6 9 6v12zM3 9l9 5 9-5M12 14v7'],
   ['erase', 'Ластик', 'M8 21h12M5.6 14.4l8-8a2 2 0 0 1 2.8 0l3.2 3.2a2 2 0 0 1 0 2.8L12 20H8.5l-2.9-2.8a2 2 0 0 1 0-2.8zM10 10l6 6'],
   ['act', 'Действие', 'M9 12V5a1.5 1.5 0 0 1 3 0v5.5m0-1a1.5 1.5 0 0 1 3 0V11m0-.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-1a6 6 0 0 1-5-2.6L4.6 15a1.5 1.5 0 0 1 2.5-1.7L9 15.5'],
 ];
@@ -1394,6 +1530,19 @@ function vmDraw() {
 
   // каталог болванок
   card(1, 102, VW - 2, 846, '#EBDFC3');
+  if (tool === 'room') {                // вместо каталога — страница комнаты
+    const R = state.room;
+    x.fillStyle = INK; x.font = `700 24px ${FONT}`; x.textAlign = 'left';
+    x.fillText('КОМНАТА', 24, 142);
+    x.font = '20px "PT Mono", ui-monospace, monospace'; x.fillStyle = '#5a5147';
+    x.fillText(`${cm(R.w)} × ${cm(R.d)} × ${cm(R.h)} см`, 24, 180);
+    btn(20, 214, 680, 84, 'room:x', 'Излом потолка вдоль', { font: 24 });
+    btn(20, 310, 680, 84, 'room:z', 'Излом потолка поперёк', { font: 24 });
+    btn(20, 406, 680, 84, 'room:reset', 'Ровный потолок', { font: 24, off: !R.ceil });
+    x.font = 'italic 21px "PT Serif", Georgia, serif'; x.fillStyle = '#5a5147'; x.textAlign = 'left';
+    ['Синие шарики на потолке — грань или угол:', 'возьмите лучом и тяните вверх или вниз.', 'Жёлтые у пола двигают линию излома.', 'Красные и зелёные на стенах — размер комнаты.']
+      .forEach((t, i) => x.fillText(t, 24, 540 + i * 34));
+  } else {
   let chx = 20, chy = 116;
   x.font = `600 18px ${FONT}`;
   for (const [id, label] of CATS) {
@@ -1418,14 +1567,19 @@ function vmDraw() {
     x.fillStyle = '#5a5147'; x.font = '15px "PT Mono", ui-monospace, monospace';
     x.fillText(t.sub, tx + 110, ty + 158);
   });
-  btn(20, 884, 96, 50, 'page:-1', '◀', { off: vm.page <= 0 });
-  btn(VW - 116, 884, 96, 50, 'page:1', '▶', { off: vm.page >= pages - 1 });
-  x.fillStyle = INK; x.font = '20px "PT Mono", ui-monospace, monospace'; x.textAlign = 'center';
-  x.fillText(`${vm.page + 1} / ${pages}`, VW / 2, 910);
+  vm.pages = pages;
+  }
+  const pages = vm.pages || 1;
+  if (tool !== 'room') {
+    btn(20, 884, 96, 50, 'page:-1', '◀', { off: vm.page <= 0 });
+    btn(VW - 116, 884, 96, 50, 'page:1', '▶', { off: vm.page >= pages - 1 });
+    x.fillStyle = INK; x.font = '20px "PT Mono", ui-monospace, monospace'; x.textAlign = 'center';
+    x.fillText(`${vm.page + 1} / ${pages}`, VW / 2, 910);
+  }
 
   // инструменты
   card(1, 962, VW - 2, 146, '#EBDFC3');
-  TOOLS.forEach(([id, label, path], i) => drawTool(x, btn, icon, id, label, path, 12 + i * 100, 974, 94, 122));
+  TOOLS.forEach(([id, label, path], i) => drawTool(x, btn, icon, id, label, path, 10 + i * 88, 974, 84, 122));
   vm.tex.needsUpdate = true;
 }
 function drawTool(x, btn, icon, id, label, path, bx, by, w, h, hot = tool === id) {
@@ -1529,6 +1683,7 @@ function vmAction(act) {
   if (!act) return;
   const [k, v] = act.split(/:(.*)/);
   if (k === 'page') vm.page += +v;
+  else if (k === 'room') { if (v === 'reset') resetCeil(); else splitCeil(v); }
   else if (k === 'add') addBlank(CATALOG.find((d) => d.type === v));
   else if (k === 'tool') setTool(v);
   else if (k === 'undo') undo();
@@ -1620,6 +1775,7 @@ function xrSelectStart(c, R) {
   if (tool === 'act') { const pk = pickItem(); if (pk) tapPart(pk); return; }
   const d = beginDrag(localRay(R), false);
   if (d) { d.t0 = performance.now(); c.userData.grab = d; return; }
+  if (tool === 'room') return;
   const pk = pickItem();
   select(pk ? pk.id : null);
 }
