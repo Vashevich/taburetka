@@ -831,6 +831,11 @@ export const RUGS = new Set(['rug', 'roundrug']);
 export const EMBED_T = new Set(['window', 'window1', 'window3', 'panorama', 'roundwindow', 'balcony', 'door', 'door2', 'slidedoor', 'opening', 'arch']);
 CATALOG.sort((a, b) => { const o = Object.values(CAT_OF).flat(); return o.indexOf(a.type) - o.indexOf(b.type); });
 for (const d of CATALOG) d.cat = Object.keys(CAT_OF).find((k) => CAT_OF[k].includes(d.type)) || 'decor';
+// У каждого раздела свой главный оттенок: по цвету сразу видно, к чему относится предмет.
+export const CAT_COLOR = { seat: '#7f9bb5', table: '#c8a27a', bed: '#b48a9c', store: '#e9e4da', shelf: '#d9a441', tech: '#8f979e',
+  plumb: '#9fd0d6', wall: '#c9c2b6', window: '#a8cbe0', door: '#a9745a', decor: '#5f8f4e' };
+const OWN_COLOR = new Set(['human', 'rug', 'roundrug', 'picture', 'mirror', 'flowers', 'tv']);   // у этих цвет свой, по смыслу
+for (const d of CATALOG) if (!OWN_COLOR.has(d.type)) d.color = CAT_COLOR[d.cat] || d.color;
 
 export function fillBlank(group, type, w, d, h, color, open, pose, p) {
   const b = new Builder(group, color || '#f1eee8');

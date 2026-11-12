@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf } from './furniture.js?v=54';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, CAT_COLOR } from './furniture.js?v=55';
 
 const STORE = 'taburetka.project.v1';
 
@@ -471,7 +471,39 @@ function buildRoom() {
 function fillItem(it, g) {
   disposeChildren(g);
   fillBlank(g, it.type, it.w, it.d, it.h, it.color, it.open, it.pose, it.p);
+  applyAdj(it, g);
   if (it.embed) shellDirty = true;
+}
+// Детали предмета по порядку постройки и ручные поправки к ним: сдвиг m и высота sy (от низа детали).
+function itemMeshes(g) {
+  const out = [];
+  g.traverse((o) => { if (o.isMesh) out.push(o); });
+  return out;
+}
+function applyAdj(it, g) {
+  const A = it.adj;
+  if (!A || !A.a) return;
+  const ms = itemMeshes(g);
+  if (ms.length !== A.n) return;        // состав деталей изменился (другие размеры) — поправки не применяем
+  for (const k in A.a) {
+    const m = ms[k], a = A.a[k];
+    if (!m) continue;
+    if (a.sy && a.sy !== 1) {
+      m.geometry.computeBoundingBox();
+      const bb = m.geometry.boundingBox, lo = bb.min.y * m.scale.y;
+      m.scale.y *= a.sy;
+      m.position.y += lo - bb.min.y * m.scale.y;          // низ детали остаётся на месте
+    }
+    if (a.m) m.position.add(new THREE.Vector3(...a.m));
+  }
+}
+function partBox(it, idx) {              // габарит детали в осях предмета (в координатах гамбола)
+  const g = objs.get(it.id), m = g && itemMeshes(g)[idx];
+  if (!m) return null;
+  g.updateMatrixWorld(true);
+  m.geometry.computeBoundingBox();
+  const inv = new THREE.Matrix4().copy(g.matrixWorld).invert().multiply(m.matrixWorld);
+  return { m, g, box: m.geometry.boundingBox.clone().applyMatrix4(inv) };
 }
 function placeItem(it) {
   const g = objs.get(it.id);
@@ -978,16 +1010,16 @@ const HCOL = { x: 0xa61e1e, z: 0x2e9e4f, y: 0x1f6feb };
 let handles = [], arrows = [];
 const ringR = (it) => Math.hypot(it.w, it.d) / 2 + 0.12;
 
-let subSel = false;                     // второй уровень выбора: внутренняя часть предмета (высота сиденья)
-function toggleSub() {
-  const it = sel();
-  if (!it || it.lock) return;
-  if (seatOf(it.type, it.h, it.p) === null) { toast('У этого предмета нет настраиваемых частей: общую высоту меняет синий кубик', 2200); return; }
-  subSel = !subSel;
+let subPart = -1;                       // второй уровень выбора: номер детали предмета или −1
+function toggleSub(pk) {
+  const it = sel(), g = it && objs.get(it.id);
+  if (!it || it.lock || !g) return;
+  const idx = pk && pk.hit ? itemMeshes(g).indexOf(pk.hit.object) : -1;
+  subPart = idx < 0 || idx === subPart ? -1 : idx;       // тот же клик по той же детали возвращает гамбол
   updateGizmo(); updateStatus();
 }
 function select(id) {
-  if (id !== selId) subSel = false;
+  if (id !== selId) subPart = -1;
   selId = id && item(id) ? id : null;
   updateGizmo(); updateProps(); updateStatus(); updateXRHint();
 }
@@ -1084,8 +1116,43 @@ function updateGizmo() {
   box.position.y = it.h / 2;
   box.renderOrder = 10;
   gizmo.add(box);
-  const seat = subSel ? seatOf(it.type, it.h, it.p) : null;
-  if (tool === 'select' && !it.lock) { if (seat !== null) addSeatHandle(it, seat); else addGumball(it); }
+  if (tool !== 'select' || it.lock) return;
+  const pb = subPart >= 0 ? partBox(it, subPart) : null;
+  if (!pb) { subPart = -1; addGumball(it); return; }
+  const seat = seatOf(it.type, it.h, it.p);
+  if (seat !== null) addSeatHandle(it, seat);
+  addPartGizmo(it, pb);
+}
+// Малый гамбол детали: стрелки двигают её по осям предмета, синий кубик меняет высоту (низ остаётся на месте).
+function addPartGizmo(it, pb) {
+  const c = pb.box.getCenter(new THREE.Vector3()), sz = pb.box.getSize(new THREE.Vector3());
+  const frame = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(sz.x + 0.008, sz.y + 0.008, sz.z + 0.008)),
+    new THREE.LineBasicMaterial({ color: 0xa61e1e, depthTest: false, transparent: true }));
+  frame.position.copy(c);
+  frame.renderOrder = 11;
+  gizmo.add(frame);
+  const hold = new THREE.Group();
+  hold.position.copy(c);
+  gizmo.add(hold);
+  for (const [axis, rx, rz] of [['x', 0, -Math.PI / 2], ['y', 0, 0], ['z', Math.PI / 2, 0]]) {
+    const mk = () => {
+      const a = new THREE.Group(), m = new THREE.MeshBasicMaterial({ color: HCOL[axis], depthTest: false, transparent: true });
+      a.rotation.set(rx, 0, rz);
+      a.userData = { mat: m, col: HCOL[axis], gb: true };
+      hold.add(a); arrows.push(a);
+      return a;
+    };
+    const put = (a, geo) => { const q = new THREE.Mesh(geo, a.userData.mat); q.renderOrder = 13; a.add(q); };
+    const grip = (a, y, data) => { const pk = new THREE.Object3D(); pk.position.y = y; pk.userData = { ...data, arrow: a }; a.add(pk); handles.push(pk); };
+    const ar = mk();
+    put(ar, new THREE.CylinderGeometry(0.018, 0.018, 0.8, 8).translate(0, 0.4, 0));
+    put(ar, new THREE.ConeGeometry(0.07, 0.2, 16).translate(0, 0.9, 0));
+    for (const t of [0.4, 0.7, 0.92]) grip(ar, t, { kind: 'pmove', axis });
+    if (axis !== 'y') continue;
+    const cu = mk();
+    put(cu, new THREE.BoxGeometry(0.1, 0.1, 0.1).translate(0, 1.28, 0));
+    grip(cu, 1.28, { kind: 'pstretch' });
+  }
 }
 // Второй клик по выбранному предмету: синяя двусторонняя стрелка на уровне сиденья или спального места.
 function addSeatHandle(it, seat) {
@@ -1474,6 +1541,20 @@ function beginDrag(lr, direct) {
   if (it && !it.lock && tool === 'select') {   // гамбол: стрелка, кубик или дуга
     const h = pickHandle(), u = h && h.userData;
     if (u && u.kind === 'param') return { mode: 'param', id: it.id, s0: seatOf(it.type, it.h, it.p), x0: it.x, z0: it.z };
+    if (u && (u.kind === 'pmove' || u.kind === 'pstretch')) {
+      const pb = partBox(it, subPart);
+      if (!pb) return null;
+      const qi = pb.g.quaternion.clone(), ax = u.kind === 'pstretch' ? 'y' : u.axis;
+      const dir = new THREE.Vector3(ax === 'x' ? 1 : 0, ax === 'y' ? 1 : 0, ax === 'z' ? 1 : 0).applyQuaternion(qi);
+      const a0 = pb.box.getCenter(new THREE.Vector3()).applyQuaternion(qi).add(pb.g.position);
+      let qp = qi.clone();              // оси родителя детали (дверца может быть открыта) в координатах комнаты
+      const chain = [];
+      for (let o = pb.m.parent; o && o !== pb.g; o = o.parent) chain.unshift(o);
+      for (const o of chain) qp.multiply(o.quaternion);
+      const old = (it.adj && it.adj.a && it.adj.a[subPart]) || {};
+      return { mode: 'part', kind: u.kind, id: it.id, idx: subPart, dir, a0, s0: axisParam(lr, a0, dir), qpInv: qp.invert(),
+        m0: old.m ? [...old.m] : [0, 0, 0], sy0: old.sy || 1, h0: pb.box.getSize(new THREE.Vector3()).y };
+    }
     if (u && u.kind === 'scale')
       return { mode: 'pull', riders: ridersOf(it), id: it.id, axis: u.axis, sign: u.sign, rot: it.rot,
         w0: it.w, d0: it.d, h0: it.h, x0: it.x, z0: it.z, hy: it.y + it.h / 2 };
@@ -1626,6 +1707,20 @@ function updateDrag(d, lr) {
     it.rot = snapRot(d.rot0 + Math.atan2(p.x - it.x, p.z - it.z) - d.a0);
     placeItem(it);
     syncGizmo(it);
+  } else if (d.mode === 'part') {        // деталь предмета: сдвиг или высота
+    const sp = axisParam(lr, d.a0, d.dir);
+    if (sp === null) return false;
+    if (d.s0 === null) { d.s0 = sp; return false; }
+    const st = state.snap > 0 ? Math.min(state.snap, 0.01) : 0, amt = st ? Math.round((sp - d.s0) / st) * st : sp - d.s0;   // детали двигаются по сантиметру
+    const g = objs.get(it.id), A = it.adj && it.adj.n === itemMeshes(g).length ? it.adj : { n: itemMeshes(g).length, a: {} };
+    const cur = { ...(A.a[d.idx] || {}) };
+    if (d.kind === 'pmove') { const v = d.dir.clone().multiplyScalar(amt).applyQuaternion(d.qpInv); cur.m = [r3(d.m0[0] + v.x), r3(d.m0[1] + v.y), r3(d.m0[2] + v.z)]; }
+    else cur.sy = Math.round((Math.max(0.01, d.h0 + amt) / (d.h0 / d.sy0)) * 1000) / 1000;
+    A.a[d.idx] = cur;
+    it.adj = A;
+    fillItem(it, g);
+    ptCache.delete(it.id);
+    updateGizmo();
   } else if (d.mode === 'param') {       // высота сиденья или спального места
     const yy = rayHeight(lr, d.x0, d.z0);
     if (yy === null) return false;
@@ -1762,7 +1857,7 @@ function onTap(e, dn) {
       ? 'Нажмите на дверцу или ящик' : 'У этого предмета нет подвижных частей', 1800);
     return;
   }
-  if (pk && pk.id === selId && tool === 'select' && dn && dn.wasSel === pk.id) { toggleSub(); return; }   // второй клик по уже выбранному предмету — его внутренняя часть
+  if (pk && pk.id === selId && tool === 'select' && dn && dn.wasSel === pk.id) { toggleSub(pk); return; }   // второй клик по уже выбранному предмету — его внутренняя часть
   select(pk ? pk.id : null);
 }
 // «Действие»: открыть / закрыть дверцу или ящик, по которому попали
@@ -1812,7 +1907,7 @@ function updateStatus() {
   if (tool === 'room') s = cutA ? 'Разрез: теперь нажмите на другое ребро той же грани — красная линия показывает, где он пройдёт' : HINTS.room;
   else if (tool === 'act' || tool === 'erase') s = HINTS[tool];
   else if (tool === 'measure') s = (measureA ? 'Рулетка: укажите вторую точку' : HINTS.measure) + (snapKind ? ` · привязка: ${snapKind}` : '');
-  else if (it && subSel && seatOf(it.type, it.h, it.p) !== null) s = `${it.name}: высота сиденья ${fmt(seatOf(it.type, it.h, it.p))} — тяните синюю стрелку; ещё одно нажатие по предмету вернёт гамбол`;
+  else if (it && subPart >= 0) s = `${it.name}: выбрана деталь — стрелки двигают её, синий кубик меняет высоту${seatOf(it.type, it.h, it.p) !== null ? `; двойная стрелка — высота сиденья ${fmt(seatOf(it.type, it.h, it.p))}` : ''}. Delete — вернуть деталь как была`;
   else if (it) s = `${it.name} — ${fmt(it.w)} × ${fmt(it.d)} × ${fmt(it.h)}`.replace(/ см(?= ×)/g, '');
   $('#status').textContent = s;
 }
@@ -1953,6 +2048,7 @@ function buildCatalog() {
   for (const [id, label] of CATS) {
     const c = document.createElement('button');
     c.textContent = label;
+    if (CAT_COLOR[id]) c.style.boxShadow = `inset 0 -5px 0 ${CAT_COLOR[id]}`;   // полоска цвета раздела
     c.dataset.cat = id;
     c.onclick = () => { catSel = id; filter(); };
     chips.append(c);
@@ -1960,6 +2056,7 @@ function buildCatalog() {
   for (const def of CATALOG) {
     const b = document.createElement('button');
     b.dataset.cat = def.cat;
+    b.style.borderBottom = `5px solid ${CAT_COLOR[def.cat] || '#1b1a18'}`;
     if (thumbs[def.type]) { const img = new Image(); img.src = thumbs[def.type]; img.alt = ''; img.draggable = false; b.append(img); }
     const name = document.createElement('span');
     name.textContent = def.name;
@@ -2120,6 +2217,9 @@ addEventListener('keydown', (e) => {
   else if (k === 't' || k === 'е') setTool('measure');
   else if (k === 'a' || k === 'ф') toggleCatalog();
   else if (k === 'escape') { if (cutA) { cancelCut(); updateStatus(); } else if (measureA) setTool('measure'); else if (!catalogEl.hidden) toggleCatalog(false); else select(null); }
+  else if ((k === 'delete' || k === 'backspace') && it && subPart >= 0) {   // в режиме детали Delete возвращает её на место
+    if (it.adj && it.adj.a && it.adj.a[subPart]) { delete it.adj.a[subPart]; fillItem(it, objs.get(it.id)); ptCache.delete(it.id); updateGizmo(); commit(); }
+  }
   else if ((k === 'delete' || k === 'backspace') && it) removeItem(it.id);
   else if (k === 'q' || k === 'й') rotateSel(Math.PI / 2);
   else if (k === 'e' || k === 'у') rotateSel(-Math.PI / 2);
@@ -2489,7 +2589,7 @@ function xrSelectEnd(c) {
   if (!g) return;
   if (g.mode === 'room') endRoomDrag(g);
   if (g.changed) { commit(); vm.dirty = true; }
-  else if (g.mode === 'move' && g.pk && performance.now() - g.t0 < 300) { if (!tapPart(g.pk) && tool === 'select') toggleSub(); }
+  else if (g.mode === 'move' && g.pk && performance.now() - g.t0 < 300) { if (!tapPart(g.pk) && tool === 'select') toggleSub(g.pk); }
 }
 function updateAim(frame) {
   let p = null;
