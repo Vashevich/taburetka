@@ -175,8 +175,20 @@ function carcass(b, w, h, D, zc, t, bot) {
   b.box(w - 2 * t, h - t - bot, 0.008, 0, bot, zc - D / 2 + 0.004, b.m2);
 }
 
-function sofa(b, w, d, h) {            // диван и кресло: сиденье выдвигается вперёд, вся глубина становится около 2 м
-  const baseH = Math.max(0.1, Math.min(0.3, h * 0.36));
+// Высота сиденья или спального места: по умолчанию считается от общей высоты, либо задана вручную (p.seat).
+const SEAT = {
+  chair: (h) => Math.min(0.45, h * 0.55), officechair: (h) => Math.min(0.48, h * 0.48), toilet: (h) => Math.min(0.42, h * 0.52),
+  sofa: (h) => Math.max(0.1, Math.min(0.3, h * 0.36)) + 0.12, cornersofa: (h) => Math.min(0.28, h * 0.36) + 0.12,
+  recliner: (h) => Math.min(0.3, h * 0.36) + 0.12, bed: (h) => Math.min(0.3, h * 0.35) + Math.min(0.22, h * 0.3),
+};
+SEAT.armchair = SEAT.sofa; SEAT.bed1 = SEAT.bed;
+export function seatOf(type, h, p) {
+  const fn = SEAT[type];
+  if (!fn) return null;
+  return p && p.seat > 0 ? Math.max(0.14, Math.min(p.seat, h - 0.06)) : fn(h);
+}
+function sofa(b, w, d, h, o = {}) {    // диван и кресло: сиденье выдвигается вперёд, вся глубина становится около 2 м
+  const baseH = seatOf('sofa', h, o.p) - 0.12;
   const armW = Math.min(0.18, w * 0.16), backD = Math.min(0.22, d * 0.26);
   const armH = Math.max(0.05, Math.min(h - baseH - 0.12, 0.3));
   b.box(w, baseH, d, 0, 0, 0, b.m2);
@@ -287,8 +299,8 @@ const BUILD = {
     b.cyl(0.04, 0.04, h - t - 0.03, 0, 0.03, 0, b.m2);
     b.cyl(0.5, 0.5, 0.03, 0, 0, 0, b.m2, w * 0.55, d * 0.55);
   },
-  chair(b, w, d, h) {
-    const sh = Math.min(0.45, h * 0.55), st = 0.04, leg = 0.035;
+  chair(b, w, d, h, o = {}) {
+    const sh = seatOf('chair', h, o.p), st = 0.04, leg = 0.035;
     b.box(w, st, d, 0, sh - st, 0);
     const { lx, lz } = legs(b, w, d, sh - st, leg, 0);
     for (const s of [-1, 1]) b.box(leg, h - sh, leg, s * lx, sh, -lz, b.m2);
@@ -305,8 +317,8 @@ const BUILD = {
   },
   sofa,
   armchair: sofa,
-  cornersofa(b, w, d, h) {
-    const bh = Math.min(0.28, h * 0.36), dd = Math.min(0.95, d * 0.5), cw = Math.min(0.95, w * 0.42), bk = 0.2;
+  cornersofa(b, w, d, h, o = {}) {
+    const bh = seatOf('cornersofa', h, o.p) - 0.12, dd = Math.min(0.95, d * 0.5), cw = Math.min(0.95, w * 0.42), bk = 0.2;
     b.box(w, bh, dd, 0, 0, -d / 2 + dd / 2, b.m2);
     b.box(cw, bh, d - dd, w / 2 - cw / 2, 0, -d / 2 + dd + (d - dd) / 2, b.m2);
     b.box(w, h - bh, bk, 0, bh, -d / 2 + bk / 2);
@@ -362,8 +374,8 @@ const BUILD = {
   },
   nightstand(b, w, d, h) { BUILD.dresser(b, w, d, h); },
   tvstand(b, w, d, h) { BUILD.dresser(b, w, d, h); },
-  bed(b, w, d, h) {
-    const fh = Math.min(0.3, h * 0.35), mh = Math.min(0.22, h * 0.3), ht = 0.06;
+  bed(b, w, d, h, o = {}) {
+    const st = seatOf('bed', h, o.p), mh = Math.min(0.22, st * 0.45), fh = st - mh, ht = 0.06;
     b.box(w, fh, d - ht, 0, 0, ht / 2, b.m2);
     b.box(w, h, ht, 0, 0, -d / 2 + ht / 2);
     const white = std('#f4f1ea');
@@ -462,7 +474,7 @@ const BUILD = {
     geo.translate(0, 0, -d / 2);
     b.finish(new THREE.Mesh(geo, b.m));
   },
-  bed1(b, w, d, h) { BUILD.bed(b, w, d, h); },
+  bed1(b, w, d, h, o) { BUILD.bed(b, w, d, h, o); },
   bunk(b, w, d, h) {                     // двухъярусная кровать с лестницей
     const p = 0.06, white = std('#f4f1ea');
     for (const sx of [-1, 1]) for (const sz of [-1, 1]) b.box(p, h, p, sx * (w / 2 - p / 2), 0, sz * (d / 2 - p / 2), b.m2);
@@ -499,8 +511,8 @@ const BUILD = {
       b.box(inner - 0.01, bh, ct - 0.02, 0, 0, -ct / 2 + 0.01, b.m3);
     });
   },
-  recliner(b, w, d, h) {                 // подножка поднимается, спинка откидывается
-    const baseH = Math.min(0.3, h * 0.36), armW = Math.min(0.16, w * 0.18), bk = 0.16, D = d - 0.07, zc = -0.035;
+  recliner(b, w, d, h, o = {}) {         // подножка поднимается, спинка откидывается
+    const baseH = seatOf('recliner', h, o.p) - 0.12, armW = Math.min(0.16, w * 0.18), bk = 0.16, D = d - 0.07, zc = -0.035;
     const inner = w - 2 * armW;
     b.box(w, baseH, D, 0, 0, zc, b.m2);
     for (const s of [-1, 1]) b.box(armW, 0.26, D - bk, s * (w / 2 - armW / 2), baseH, zc + bk / 2);
@@ -512,8 +524,8 @@ const BUILD = {
       b.box(inner - 0.02, baseH - 0.05, 0.06, 0, -(baseH - 0.05), 0.03, b.m3);
     });
   },
-  officechair(b, w, d, h) {
-    const sh = Math.min(0.48, h * 0.48);
+  officechair(b, w, d, h, o = {}) {
+    const sh = seatOf('officechair', h, o.p);
     for (let i = 0; i < 5; i++) {
       const a = (i / 5) * Math.PI * 2, leg = b.box(0.04, 0.03, w * 0.48, Math.sin(a) * w * 0.24, 0.04, Math.cos(a) * w * 0.24, b.m2);
       leg.rotation.y = a;
@@ -581,8 +593,8 @@ const BUILD = {
       b.box(w * 0.7, 0.02, 0.03, 0, dh - 0.06, 0.03, b.m2);
     });
   },
-  toilet(b, w, d, h) {                   // крышка поднимается
-    const sh = Math.min(0.42, h * 0.52), tk = Math.min(0.2, d * 0.28), white = b.m;
+  toilet(b, w, d, h, o = {}) {           // крышка поднимается
+    const sh = seatOf('toilet', h, o.p), tk = Math.min(0.2, d * 0.28), white = b.m;
     b.box(w, h - sh + 0.02, tk, 0, sh - 0.02, -d / 2 + tk / 2, white);
     b.cyl(0.3, 0.22, sh * 0.55, 0, 0, 0.02, white, w * 0.9, (d - tk) * 0.9);
     b.cyl(0.5, 0.36, sh * 0.45, 0, sh * 0.55 - 0.02, tk / 2, white, w * 0.86, d - tk);
@@ -820,9 +832,9 @@ export const EMBED_T = new Set(['window', 'window1', 'window3', 'panorama', 'rou
 CATALOG.sort((a, b) => { const o = Object.values(CAT_OF).flat(); return o.indexOf(a.type) - o.indexOf(b.type); });
 for (const d of CATALOG) d.cat = Object.keys(CAT_OF).find((k) => CAT_OF[k].includes(d.type)) || 'decor';
 
-export function fillBlank(group, type, w, d, h, color, open, pose) {
+export function fillBlank(group, type, w, d, h, color, open, pose, p) {
   const b = new Builder(group, color || '#f1eee8');
-  (BUILD[type] || BUILD.box)(b, w, d, h, { pose });
+  (BUILD[type] || BUILD.box)(b, w, d, h, { pose, p });
   cleanSeams(group);
   for (const c of group.children)
     if (c.userData.act) applyAct(c, open && open.includes(c.userData.part) ? 1 : 0);

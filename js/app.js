@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T } from './furniture.js?v=53';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf } from './furniture.js?v=54';
 
 const STORE = 'taburetka.project.v1';
 
@@ -470,7 +470,7 @@ function buildRoom() {
 // ───────────────────────── предметы ─────────────────────────
 function fillItem(it, g) {
   disposeChildren(g);
-  fillBlank(g, it.type, it.w, it.d, it.h, it.color, it.open, it.pose);
+  fillBlank(g, it.type, it.w, it.d, it.h, it.color, it.open, it.pose, it.p);
   if (it.embed) shellDirty = true;
 }
 function placeItem(it) {
@@ -978,7 +978,16 @@ const HCOL = { x: 0xa61e1e, z: 0x2e9e4f, y: 0x1f6feb };
 let handles = [], arrows = [];
 const ringR = (it) => Math.hypot(it.w, it.d) / 2 + 0.12;
 
+let subSel = false;                     // второй уровень выбора: внутренняя часть предмета (высота сиденья)
+function toggleSub() {
+  const it = sel();
+  if (!it || it.lock) return;
+  if (seatOf(it.type, it.h, it.p) === null) { toast('У этого предмета нет настраиваемых частей: общую высоту меняет синий кубик', 2200); return; }
+  subSel = !subSel;
+  updateGizmo(); updateStatus();
+}
 function select(id) {
+  if (id !== selId) subSel = false;
   selId = id && item(id) ? id : null;
   updateGizmo(); updateProps(); updateStatus(); updateXRHint();
 }
@@ -1075,7 +1084,25 @@ function updateGizmo() {
   box.position.y = it.h / 2;
   box.renderOrder = 10;
   gizmo.add(box);
-  if (tool === 'select' && !it.lock) addGumball(it);
+  const seat = subSel ? seatOf(it.type, it.h, it.p) : null;
+  if (tool === 'select' && !it.lock) { if (seat !== null) addSeatHandle(it, seat); else addGumball(it); }
+}
+// Второй клик по выбранному предмету: синяя двусторонняя стрелка на уровне сиденья или спального места.
+function addSeatHandle(it, seat) {
+  const mat = new THREE.MeshBasicMaterial({ color: HCOL.y, depthTest: false, transparent: true }), hm = new THREE.Group();
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 2.2, 10), mat);
+  const tipA = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.3, 14).translate(0, 1.75, 0), mat);
+  const tipB = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.3, 14).rotateX(Math.PI).translate(0, -1.75, 0), mat);
+  for (const q of [shaft, tipA, tipB]) { q.renderOrder = 12; hm.add(q); }
+  hm.position.set(0, seat, it.d * 0.15);
+  hm.userData = { kind: 'param', cs: coarse ? 0.014 : 0.009, mat, col: HCOL.y, pr: 2 };
+  gizmo.add(hm);
+  handles.push(hm);
+  const x = it.w / 2 + 0.01, z = it.d / 2 + 0.01;
+  const loop = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints([[-x, -z], [x, -z], [x, z], [-x, z]].map(([a, b]) => new THREE.Vector3(a, seat, b))),
+    new THREE.LineBasicMaterial({ color: HCOL.y, depthTest: false, transparent: true }));
+  loop.renderOrder = 11;
+  gizmo.add(loop);
 }
 // Гамбол, как в Rhino: в одном месте стрелки перемещения, кубики растяжения и дуга поворота.
 // Оси — самого предмета; всё постоянного размера на экране.
@@ -1086,7 +1113,7 @@ function addGumball(it) {
   const part = (col, rx, rz) => {
     const a = new THREE.Group(), m = new THREE.MeshBasicMaterial({ color: col, depthTest: false, transparent: true });
     a.rotation.set(rx, 0, rz);
-    a.userData = { mat: m, col };
+    a.userData = { mat: m, col, gb: true };
     hold.add(a);
     arrows.push(a);
     return a;
@@ -1128,7 +1155,7 @@ const _m1 = new THREE.Vector3(), _x = new THREE.Vector3(), _y = new THREE.Vector
 const _pa = new THREE.Vector2(), _pb = new THREE.Vector2(), _pc = new THREE.Vector2(), _q = new THREE.Quaternion(), _zAxis = new THREE.Vector3(0, 0, 1), _winv = new THREE.Matrix4();
 function updateConstSize() {
   for (const h of handles) if (h.userData.cs) h.scale.setScalar(h.userData.cs * viewHeightAt(h));
-  for (const a of arrows) a.scale.setScalar((coarse ? 0.16 : 0.12) * viewHeightAt(a));
+  for (const a of arrows) a.scale.setScalar((coarse ? 0.16 : 0.12) * (a.userData.gb ? 0.5 : 1) * viewHeightAt(a));   // гамбол вдвое меньше стрелок комнаты
   for (const cm2 of [cutMarker, cutMarkerA]) if (cm2.visible) cm2.scale.setScalar((coarse ? 0.014 : 0.009) * viewHeightAt(cm2));
   if (snapMarker.visible) snapMarker.scale.setScalar((snapMarker.userData.cs || 0.01) * viewHeightAt(snapMarker));
   // Таблички размеров: на экране — постоянный экранный размер, лицом к камере;
@@ -1185,7 +1212,7 @@ function pickHandle() {
   let best = null, bd = Infinity;
   for (const h of handles) {
     h.getWorldPosition(_v);
-    const rad = h.userData.arrow ? h.userData.arrow.scale.x * 0.1 : h.scale.x * (h.userData.pr || 1);
+    const rad = h.userData.arrow ? h.userData.arrow.scale.x * (h.userData.arrow.userData.gb ? 0.16 : 0.1) : h.scale.x * (h.userData.pr || 1);
     const d = ray.ray.distanceToPoint(_v), lim = rad * (world.scale.x || 1) * 2.4;
     if (d < lim && d < bd) { bd = d; best = h; }
   }
@@ -1420,7 +1447,7 @@ function onDown(e) {
   if (down && !e.isPrimary) { down.multi = true; return; }
   down = null;
   if (e.button !== 0) return;
-  down = { pid: e.pointerId, x: e.clientX, y: e.clientY, multi: false, moved: false, noTap: false };
+  down = { pid: e.pointerId, x: e.clientX, y: e.clientY, multi: false, moved: false, noTap: false, wasSel: selId };
   if (tool === 'measure' || tool === 'act' || tool === 'erase') return;
   setRay(e);
   const d = beginDrag(localRay(ray.ray), e.pointerType === 'mouse');
@@ -1446,6 +1473,7 @@ function beginDrag(lr, direct) {
   const it = sel();
   if (it && !it.lock && tool === 'select') {   // гамбол: стрелка, кубик или дуга
     const h = pickHandle(), u = h && h.userData;
+    if (u && u.kind === 'param') return { mode: 'param', id: it.id, s0: seatOf(it.type, it.h, it.p), x0: it.x, z0: it.z };
     if (u && u.kind === 'scale')
       return { mode: 'pull', riders: ridersOf(it), id: it.id, axis: u.axis, sign: u.sign, rot: it.rot,
         w0: it.w, d0: it.d, h0: it.h, x0: it.x, z0: it.z, hy: it.y + it.h / 2 };
@@ -1598,6 +1626,14 @@ function updateDrag(d, lr) {
     it.rot = snapRot(d.rot0 + Math.atan2(p.x - it.x, p.z - it.z) - d.a0);
     placeItem(it);
     syncGizmo(it);
+  } else if (d.mode === 'param') {       // высота сиденья или спального места
+    const yy = rayHeight(lr, d.x0, d.z0);
+    if (yy === null) return false;
+    if (d.l0 === undefined) { d.l0 = yy; return false; }
+    it.p = { ...(it.p || {}), seat: r3(clamp(snapLen(d.s0 + yy - d.l0), 0.14, it.h - 0.06)) };
+    fillItem(it, objs.get(it.id));
+    ptCache.delete(it.id);
+    updateGizmo();
   } else if (d.mode === 'pull') {
     if (!applyPull(it, d, lr)) return false;
     fillItem(it, objs.get(it.id));
@@ -1626,6 +1662,16 @@ function measureTap() {
     commit();
   }
   updateStatus();
+}
+function rayHeight(lr, x0, z0) {         // высота курсора над точкой (x0, z0): луч пересекает вертикальную плоскость, обращённую к зрителю
+  const n = (renderer.xr.isPresenting ? camera : cam()).getWorldDirection(new THREE.Vector3());
+  n.y = 0;
+  if (n.lengthSq() < 1e-4) return null;
+  n.normalize().transformDirection(_inv);
+  const den = lr.d.dot(n);
+  if (Math.abs(den) < 1e-5) return null;
+  const t = new THREE.Vector3(x0, 0, z0).sub(lr.o).dot(n) / den;
+  return t > 0 ? lr.o.y + lr.d.y * t : null;
 }
 function applyPull(it, d, lr) {
   let f = 1;
@@ -1698,10 +1744,10 @@ function onUp(e) {
   if (down && e.pointerId === down.pid) {
     const d = down;
     down = null;
-    if (e.type === 'pointerup' && !d.moved && !d.multi && !d.noTap) onTap(e);
+    if (e.type === 'pointerup' && !d.moved && !d.multi && !d.noTap) onTap(e, d);
   }
 }
-function onTap(e) {
+function onTap(e, dn) {
   setRay(e);
   if (tool === 'measure') { measureTap(); return; }
   if (tool === 'erase') { doErase(eraseTarget()); return; }
@@ -1716,6 +1762,7 @@ function onTap(e) {
       ? 'Нажмите на дверцу или ящик' : 'У этого предмета нет подвижных частей', 1800);
     return;
   }
+  if (pk && pk.id === selId && tool === 'select' && dn && dn.wasSel === pk.id) { toggleSub(); return; }   // второй клик по уже выбранному предмету — его внутренняя часть
   select(pk ? pk.id : null);
 }
 // «Действие»: открыть / закрыть дверцу или ящик, по которому попали
@@ -1765,6 +1812,7 @@ function updateStatus() {
   if (tool === 'room') s = cutA ? 'Разрез: теперь нажмите на другое ребро той же грани — красная линия показывает, где он пройдёт' : HINTS.room;
   else if (tool === 'act' || tool === 'erase') s = HINTS[tool];
   else if (tool === 'measure') s = (measureA ? 'Рулетка: укажите вторую точку' : HINTS.measure) + (snapKind ? ` · привязка: ${snapKind}` : '');
+  else if (it && subSel && seatOf(it.type, it.h, it.p) !== null) s = `${it.name}: высота сиденья ${fmt(seatOf(it.type, it.h, it.p))} — тяните синюю стрелку; ещё одно нажатие по предмету вернёт гамбол`;
   else if (it) s = `${it.name} — ${fmt(it.w)} × ${fmt(it.d)} × ${fmt(it.h)}`.replace(/ см(?= ×)/g, '');
   $('#status').textContent = s;
 }
@@ -2441,7 +2489,7 @@ function xrSelectEnd(c) {
   if (!g) return;
   if (g.mode === 'room') endRoomDrag(g);
   if (g.changed) { commit(); vm.dirty = true; }
-  else if (g.mode === 'move' && g.pk && performance.now() - g.t0 < 300) tapPart(g.pk);
+  else if (g.mode === 'move' && g.pk && performance.now() - g.t0 < 300) { if (!tapPart(g.pk) && tool === 'select') toggleSub(); }
 }
 function updateAim(frame) {
   let p = null;
@@ -2529,20 +2577,7 @@ function sticks(dt) {
     const ax = gp.axes;
     const x = (Math.abs(ax[2] ?? 0) > Math.abs(ax[0] ?? 0) ? ax[2] : ax[0]) || 0;
     const y = (Math.abs(ax[3] ?? 0) > Math.abs(ax[1] ?? 0) ? ax[3] : ax[1]) || 0;
-    if (hand === 'right') {             // правый стик: вперёд-назад — движение, влево-вправо — плавный поворот
-      const f = camera.getWorldDirection(new THREE.Vector3());
-      f.y = 0; f.normalize();
-      if (xr.env) {
-        if (Math.abs(x) > 0.2) {
-          const an = -Math.sign(x) * ((Math.abs(x) - 0.2) / 0.8) * 1.6 * dt, h = camera.getWorldPosition(new THREE.Vector3());
-          rig.position.sub(h).applyAxisAngle(THREE.Object3D.DEFAULT_UP, an).add(h);
-          rig.rotation.y += an;
-        }
-        if (Math.abs(y) > 0.2) rig.position.addScaledVector(f, -Math.sign(y) * ((Math.abs(y) - 0.2) / 0.8) * 1.6 * dt);
-      } else {                          // сквозной режим: стик аккуратно двигает и поворачивает саму комнату
-        if (Math.abs(x) > 0.35) world.rotation.y -= x * dt * 0.5;
-        if (Math.abs(y) > 0.35) world.position.addScaledVector(f, -y * 0.4 * dt);
-      }
+    if (hand === 'right') {             // правый стик свободен: движение и поворот с него убраны (Сергей, 12.11.2026)
     } else if (hand === 'left') {       // левый стик листает меню: ←→ страницы, ↑↓ вкладки
       const nx = Math.abs(x) > 0.6 && Math.abs(x) >= Math.abs(y) ? Math.sign(x) : 0;
       const ny = Math.abs(y) > 0.6 && Math.abs(y) > Math.abs(x) ? Math.sign(y) : 0;
