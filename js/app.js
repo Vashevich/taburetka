@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, CAT_COLOR } from './furniture.js?v=59';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, CAT_COLOR } from './furniture.js?v=60';
 
 const STORE = 'taburetka.project.v1';
 
@@ -2859,6 +2859,7 @@ function boot() {
     updateAuto(renderer.xr.isPresenting ? camera : cam());
     updateConstSize();
     if (renderer.xr.isPresenting || !post) renderer.render(scene, renderer.xr.isPresenting ? camera : cam());
+    else if (!innerWidth || !innerHeight) { /* вкладка свёрнута — рисовать некуда */ }
     else { try { post.render(cam()); } catch (e) { console.warn('Затенение отключено', e); post = null; } }
   });
   initPost();
