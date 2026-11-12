@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, CAT_COLOR } from './furniture.js?v=55';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, CAT_COLOR } from './furniture.js?v=56';
 
 const STORE = 'taburetka.project.v1';
 
@@ -1279,7 +1279,7 @@ function pickHandle() {
   let best = null, bd = Infinity;
   for (const h of handles) {
     h.getWorldPosition(_v);
-    const rad = h.userData.arrow ? h.userData.arrow.scale.x * (h.userData.arrow.userData.gb ? 0.16 : 0.1) : h.scale.x * (h.userData.pr || 1);
+    const rad = h.userData.arrow ? h.userData.arrow.scale.x * (h.userData.arrow.userData.gb ? 0.11 : 0.1) : h.scale.x * (h.userData.pr || 1);
     const d = ray.ray.distanceToPoint(_v), lim = rad * (world.scale.x || 1) * 2.4;
     if (d < lim && d < bd) { bd = d; best = h; }
   }
