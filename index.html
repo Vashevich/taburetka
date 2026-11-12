@@ -3,9 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#f6f1e7">
+<meta name="theme-color" content="#E8DABB">
 <title>Табуретка — планировщик комнаты в 3D, VR и AR</title>
-<link rel="stylesheet" href="style.css?v=4">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=PT+Mono&family=PT+Sans:wght@400;700&family=PT+Serif:ital,wght@0,400;1,400&display=swap">
+<link rel="stylesheet" href="style.css?v=5">
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
@@ -160,8 +163,8 @@
       <li><b>Тянуть.</b> Аналог Push/Pull: тащите цветные шарики на гранях, чтобы менять ширину, глубину, высоту. Точные размеры — в панели «⋯».</li>
       <li><b>Действие.</b> Нажмите на дверцу шкафа, холодильника, двери или на ящик комода — они откроются; ещё раз — закроются. В AR и VR то же делает короткое нажатие.</li>
       <li><b>Рулетка.</b> Два нажатия — размер между точками. Точка липнет к углам мебели и комнаты (зелёная метка), затем к вершинам модели (синяя); метка под курсором показывает, куда встанет точка.</li>
-      <li><b>VR.</b> Курок — взять и двигать предмет, стик во время захвата — поворот. Боковая кнопка — телепорт. Левый стик — ходьба, правый — поворот. Палитра мебели — на левом контроллере.</li>
-      <li><b>AR.</b> Наведите прицел на пол и нажмите — комната встанет в это место. Дальше предметы двигаются пальцем по настоящему полу. «Макет» — уменьшенная копия на столе.</li>
+      <li><b>VR.</b> Курок: первое нажатие выделяет предмет, нажатие по выделенному — тащит. Правый стик ←→ вращает выделенный предмет. A — показать / убрать «Тянуть», B — «Рулетка», X — отмена, Y — спрятать меню. Боковая кнопка — телепорт, левый стик — ходьба. Меню с каталогом и инструментами — на левом контроллере; кнопки VR / AR в нём переключают режим.</li>
+      <li><b>AR (сквозной режим).</b> В шлеме: то же управление, но без ходьбы — левый стик аккуратно сдвигает комнату, правый (когда ничего не выделено) поворачивает её, чтобы совместить с настоящей. На телефоне: наведите прицел на пол и нажмите, дальше двигайте предметы пальцем. «Макет» — уменьшенная копия.</li>
       <li><b>Проект</b> сохраняется в браузере автоматически; через меню — в файл или ссылкой.</li>
     </ul>
     <div class="row end"><button class="primary">Понятно</button></div>
@@ -185,7 +188,7 @@
 <input id="fileModel" type="file" accept=".glb,.gltf,.obj,.stl,.fbx,model/gltf-binary" hidden>
 <input id="fileProject" type="file" accept=".json,application/json" hidden>
 
-<script type="module" src="js/app.js?v=4"></script>
+<script type="module" src="js/app.js?v=5"></script>
 <noscript>Для работы приложения нужен JavaScript.</noscript>
 </body>
 </html>

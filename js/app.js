@@ -6,7 +6,7 @@ import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, fillBlank, applyAct, EDGE } from './furniture.js?v=4';
+import { CATALOG, fillBlank, applyAct, EDGE } from './furniture.js?v=5';
 
 const LIBS = 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/';
 const KHR = 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/';
@@ -34,7 +34,7 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.xr.enabled = true;
 
 const scene = new THREE.Scene();
-const SKY = new THREE.Color('#e9eef2');
+const SKY = new THREE.Color('#EFE6D0');
 scene.background = SKY;
 
 const rig = new THREE.Group();          // «тележка» пользователя в VR
@@ -63,7 +63,7 @@ sun.shadow.bias = -0.0005;
 scene.add(sun);
 
 const ground = new THREE.Mesh(new THREE.CircleGeometry(60, 48),
-  new THREE.MeshStandardMaterial({ color: '#d5dbd3', roughness: 1 }));
+  new THREE.MeshStandardMaterial({ color: '#DCCFAE', roughness: 1 }));
 ground.rotation.x = -Math.PI / 2;
 ground.position.y = -0.02;
 ground.receiveShadow = true;
@@ -134,6 +134,7 @@ function redo() {
   load(JSON.parse(cur)); save(); refreshHistoryButtons();
 }
 function refreshHistoryButtons() {
+  vm.dirty = true;
   $('#btnUndo').disabled = !undoStack.length;
   $('#btnRedo').disabled = !redoStack.length;
 }
@@ -190,7 +191,7 @@ function buildRoom() {
 
   const o = [-w / 2, 0, -d / 2, w / 2, 0, -d / 2, w / 2, 0, d / 2, -w / 2, 0, d / 2];
   outline = new THREE.LineLoop(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(o, 3)),
-    new THREE.LineBasicMaterial({ color: 0xd9482b }));
+    new THREE.LineBasicMaterial({ color: 0xa61e1e }));
   outline.position.y = 0.004;
 
   for (const m of [floorMesh, gridLines, wallMesh, wallEdges, outline]) m.raycast = () => {};
@@ -693,7 +694,7 @@ function pickItem() {
 
 // ───────────────────────── выделение и «ручки» ─────────────────────────
 const SEL = new THREE.LineBasicMaterial({ color: 0x1f6feb, depthTest: false, transparent: true });
-const HCOL = { x: 0xd9482b, z: 0x2e9e4f, y: 0x1f6feb };
+const HCOL = { x: 0xa61e1e, z: 0x2e9e4f, y: 0x1f6feb };
 let handles = [], arrows = [];
 const ringR = (it) => Math.hypot(it.w, it.d) / 2 + 0.12;
 
@@ -795,19 +796,19 @@ function pickHandle() {
 }
 
 // ───────────────────────── рулетка ─────────────────────────
-const DIM = new THREE.LineBasicMaterial({ color: 0xd9482b, depthTest: false, transparent: true });
+const DIM = new THREE.LineBasicMaterial({ color: 0xa61e1e, depthTest: false, transparent: true });
 let measureA = null;
 function makeLabel(text) {
-  const c = document.createElement('canvas'), x = c.getContext('2d'), font = '600 40px system-ui, sans-serif';
+  const c = document.createElement('canvas'), x = c.getContext('2d'), font = '38px "PT Mono", ui-monospace, monospace';
   x.font = font;
   c.width = Math.ceil(x.measureText(text).width) + 32;
   c.height = 64;
   x.font = font;
-  x.fillStyle = '#fffdf8';
+  x.fillStyle = '#F3EAD4';
   x.beginPath();
-  if (x.roundRect) x.roundRect(1, 1, c.width - 2, 62, 14); else x.rect(1, 1, c.width - 2, 62);
+  x.rect(2, 2, c.width - 4, 60);
   x.fill();
-  x.strokeStyle = '#d9482b'; x.lineWidth = 3; x.stroke();
+  x.strokeStyle = '#1b1a18'; x.lineWidth = 4; x.stroke();
   x.fillStyle = '#1d1d1b'; x.textAlign = 'center'; x.textBaseline = 'middle';
   x.fillText(text, c.width / 2, 34);
   const tex = new THREE.CanvasTexture(c);
@@ -834,7 +835,7 @@ function rebuildDims() {
 }
 // Привязка рулетки: сначала углы габаритов мебели и комнаты, затем вершины модели под курсором,
 // иначе — точка на поверхности или на полу (по сетке).
-const SNAP_COL = { corner: 0x2e9e4f, vertex: 0x1f6feb, free: 0xd9482b };
+const SNAP_COL = { corner: 0x2e9e4f, vertex: 0x1f6feb, free: 0xa61e1e };
 const SNAP_NAME = { corner: 'угол', vertex: 'вершина', free: '' };
 const snapMarker = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12),
   new THREE.MeshBasicMaterial({ color: SNAP_COL.free, depthTest: false, transparent: true }));
@@ -859,6 +860,12 @@ function itemCorners(it, out) {
   }
 }
 function pxDist(pLocal) {               // расстояние от курсора до точки на экране, в пикселях
+  if (renderer.xr.isPresenting) {       // в шлеме — угловое расстояние от луча контроллера
+    _v.copy(pLocal).applyMatrix4(world.matrixWorld);
+    const o = ray.ray.origin, dist = _v.distanceTo(o);
+    if (dist < 1e-3 || _c.copy(_v).sub(o).dot(ray.ray.direction) < 0) return Infinity;
+    return (ray.ray.distanceToPoint(_v) / dist) * 500;
+  }
   _v.copy(pLocal).applyMatrix4(world.matrixWorld).project(cam());
   if (_v.z > 1 || _v.z < -1) return Infinity;
   return Math.hypot(((_v.x + 1) / 2) * curPx.z - curPx.x, ((1 - _v.y) / 2) * curPx.w - curPx.y);
@@ -934,51 +941,98 @@ function onDown(e) {
   down = { pid: e.pointerId, x: e.clientX, y: e.clientY, multi: false, moved: false, noTap: false };
   if (tool === 'measure' || tool === 'act') return;
   setRay(e);
-  const it = sel(), lr = localRay(ray.ray);
-  if (it && tool === 'pull' && !it.lock) {
+  const d = beginDrag(localRay(ray.ray), e.pointerType === 'mouse');
+  if (d) { if (d.mode !== 'move') down.noTap = true; startDrag(d, e); }
+}
+// Начало перетаскивания лучом ray (мышь, палец или контроллер). direct — можно тащить невыделенный предмет.
+function beginDrag(lr, direct) {
+  const it = sel();
+  if (it && !it.lock && (tool === 'pull' || tool === 'move3d')) {
     const h = pickHandle();
+    if (h && tool === 'pull')
+      return { mode: 'pull', id: it.id, axis: h.userData.axis, sign: h.userData.sign, rot: it.rot,
+        w0: it.w, d0: it.d, h0: it.h, x0: it.x, z0: it.z, hy: it.y + it.h / 2 };
     if (h) {
-      down.noTap = true;
-      startDrag({ mode: 'pull', id: it.id, axis: h.userData.axis, sign: h.userData.sign, rot: it.rot,
-        w0: it.w, d0: it.d, h0: it.h, x0: it.x, z0: it.z, hy: it.y + it.h / 2 }, e);
-      return;
-    }
-  }
-  if (it && tool === 'move3d' && !it.lock) {
-    const h = pickHandle();
-    if (h) {
-      down.noTap = true;
       const a0 = new THREE.Vector3(it.x, it.y + it.h / 2, it.z);
-      startDrag({ mode: 'axis', id: it.id, axis: h.userData.axis, a0, s0: axisParam(lr, a0, AXES[h.userData.axis]),
-        x0: it.x, y0: it.y, z0: it.z }, e);
-      return;
+      return { mode: 'axis', id: it.id, axis: h.userData.axis, a0, s0: axisParam(lr, a0, AXES[h.userData.axis]),
+        x0: it.x, y0: it.y, z0: it.z };
     }
   }
   const pk = pickItem();
   if (it && tool === 'rotate' && !it.lock) {
     const p = hitPlaneY(lr, it.y);
-    if (p && ((pk && pk.id === it.id) || Math.hypot(p.x - it.x, p.z - it.z) < ringR(it) * 1.3)) {
-      down.noTap = true;
-      startDrag({ mode: 'rotate', id: it.id, a0: Math.atan2(p.x - it.x, p.z - it.z), rot0: it.rot }, e);
-      return;
-    }
+    if (p && ((pk && pk.id === it.id) || Math.hypot(p.x - it.x, p.z - it.z) < ringR(it) * 1.3))
+      return { mode: 'rotate', id: it.id, a0: Math.atan2(p.x - it.x, p.z - it.z), rot0: it.rot };
   }
-  if (pk && (e.pointerType === 'mouse' || pk.id === selId)) {
+  if (pk && (direct || pk.id === selId)) {
     if (pk.id !== selId) select(pk.id);
     const t = item(pk.id);
-    if (t.lock) return;
+    if (t.lock) return null;
     world.updateMatrixWorld(true);
-    const pl = world.worldToLocal(pk.point);
-    startDrag({ mode: 'move', ...makeGrab(t, pl, tool === 'move3d') }, e);
+    const pl = world.worldToLocal(pk.point.clone());
+    return { mode: 'move', ...makeGrab(t, pl, tool === 'move3d'), pk };
   }
+  return null;
+}
+function updateDrag(d, lr) {
+  const it = item(d.id);
+  if (!it) return false;
+  if (d.mode === 'move') {
+    if (!dragMove(it, d, lr)) return false;
+    placeItem(it);
+    gizmo.position.set(it.x, it.y, it.z);
+  } else if (d.mode === 'axis') {
+    const sp = axisParam(lr, d.a0, AXES[d.axis]);
+    if (sp === null) return false;
+    if (d.s0 === null) { d.s0 = sp; return false; }
+    const dl = sp - d.s0, st = state.snap, sn = (v) => (st > 0 ? Math.round(v / st) * st : v);
+    if (d.axis === 'x') it.x = r3(sn(d.x0 + dl));
+    else if (d.axis === 'z') it.z = r3(sn(d.z0 + dl));
+    else {
+      let y = sn(d.y0 + dl);
+      const H = state.room.h;
+      if (st > 0) { if (Math.abs(y) < 0.03) y = 0; if (Math.abs(y + it.h - H) < 0.06) y = H - it.h; }
+      it.y = r3(y);
+    }
+    placeItem(it);
+    gizmo.position.set(it.x, it.y, it.z);
+  } else if (d.mode === 'rotate') {
+    const p = hitPlaneY(lr, it.y);
+    if (!p) return false;
+    it.rot = snapRot(d.rot0 + Math.atan2(p.x - it.x, p.z - it.z) - d.a0);
+    placeItem(it);
+    gizmo.rotation.y = it.rot;
+  } else if (d.mode === 'pull') {
+    if (!applyPull(it, d, lr)) return false;
+    fillItem(it, objs.get(it.id));
+    placeItem(it);
+    updateGizmo();
+  }
+  d.changed = true;
+  return true;
+}
+function measureTap() {
+  const m = measurePoint();
+  if (!m) return;
+  const p = m.p.clone();
+  showSnap(m);
+  if (!measureA) measureA = p;
+  else {
+    state.dims.push({ a: measureA.toArray().map(r3), b: p.toArray().map(r3) });
+    measureA = null;
+    clearGroup(tmpG);
+    rebuildDims();
+    commit();
+  }
+  updateStatus();
 }
 function applyPull(it, d, lr) {
   let f = 1;
   if (d.axis === 'y') {
-    const n = cam().getWorldDirection(new THREE.Vector3());
+    const n = (renderer.xr.isPresenting ? camera : cam()).getWorldDirection(new THREE.Vector3());
     n.y = 0;
     if (n.lengthSq() < 1e-4) return false;         // вид строго сверху — высоту не потянуть
-    n.normalize();
+    n.normalize().transformDirection(_inv);
     const den = lr.d.dot(n);
     if (Math.abs(den) < 1e-5) return false;
     const t = new THREE.Vector3(d.x0, 0, d.z0).sub(lr.o).dot(n) / den;
@@ -1006,43 +1060,9 @@ function onMove(e) {
   if (down && e.pointerId === down.pid && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) down.moved = true;
   if (drag) {
     if (e.pointerId !== drag.pid || !down?.moved) return;
-    const it = item(drag.id);
-    if (!it) { drag = null; ctl().enabled = true; return; }
+    if (!item(drag.id)) { drag = null; ctl().enabled = true; return; }
     setRay(e);
-    const lr = localRay(ray.ray);
-    if (drag.mode === 'move') {
-      if (!dragMove(it, drag, lr)) return;
-      placeItem(it);
-      gizmo.position.set(it.x, it.y, it.z);
-    } else if (drag.mode === 'axis') {
-      const sp = axisParam(lr, drag.a0, AXES[drag.axis]);
-      if (sp === null) return;
-      if (drag.s0 === null) { drag.s0 = sp; return; }
-      const dl = sp - drag.s0, st = state.snap, sn = (v) => (st > 0 ? Math.round(v / st) * st : v);
-      if (drag.axis === 'x') it.x = r3(sn(drag.x0 + dl));
-      else if (drag.axis === 'z') it.z = r3(sn(drag.z0 + dl));
-      else {
-        let y = sn(drag.y0 + dl);
-        const H = state.room.h;
-        if (st > 0) { if (Math.abs(y) < 0.03) y = 0; if (Math.abs(y + it.h - H) < 0.06) y = H - it.h; }
-        it.y = r3(y);
-      }
-      placeItem(it);
-      gizmo.position.set(it.x, it.y, it.z);
-    } else if (drag.mode === 'rotate') {
-      const p = hitPlaneY(lr, it.y);
-      if (!p) return;
-      it.rot = snapRot(drag.rot0 + Math.atan2(p.x - it.x, p.z - it.z) - drag.a0);
-      placeItem(it);
-      gizmo.rotation.y = it.rot;
-    } else if (drag.mode === 'pull') {
-      if (!applyPull(it, drag, lr)) return;
-      fillItem(it, objs.get(it.id));
-      placeItem(it);
-      updateGizmo();
-    }
-    drag.changed = true;
-    updateStatus();
+    if (updateDrag(drag, localRay(ray.ray))) updateStatus();
     return;
   }
   if (tool === 'measure' && e.pointerType === 'mouse' && !(down && down.moved)) {
@@ -1071,22 +1091,7 @@ function onUp(e) {
 }
 function onTap(e) {
   setRay(e);
-  if (tool === 'measure') {
-    const m = measurePoint();
-    if (!m) return;
-    const p = m.p.clone();
-    showSnap(m);
-    if (!measureA) measureA = p;
-    else {
-      state.dims.push({ a: measureA.toArray().map(r3), b: p.toArray().map(r3) });
-      measureA = null;
-      clearGroup(tmpG);
-      rebuildDims();
-      commit();
-    }
-    updateStatus();
-    return;
-  }
+  if (tool === 'measure') { measureTap(); return; }
   const pk = pickItem();
   if (tool === 'act') {
     if (!pk) return;
@@ -1145,6 +1150,7 @@ function setTool(t) {
   measureA = null;
   clearGroup(tmpG);
   showSnap(null);
+  vm.dirty = true;
   for (const b of $$('#tools [data-tool]')) b.classList.toggle('on', b.dataset.tool === t);
   updateGizmo(); updateStatus();
 }
@@ -1220,8 +1226,9 @@ for (const b of $$('#catalog [data-tab]')) b.onclick = () => {
 $('#phSearch').addEventListener('input', (e) => { ph.q = e.target.value; ph.shown = 48; renderPolyHaven(); });
 $('#phMore').onclick = () => { ph.shown += 48; renderPolyHaven(); };
 function afterAdd() { if (innerWidth <= 640 || renderer.xr.isPresenting) toggleCatalog(false); }
+let blankThumbs = {};
 function buildCatalog() {
-  const thumbs = makeThumbs();
+  const thumbs = blankThumbs = makeThumbs();
   const grid = $('#tabBlanks');
   for (const def of CATALOG) {
     const b = document.createElement('button');
@@ -1283,6 +1290,7 @@ async function openPolyHaven() {
   ph.loading = false;
 }
 function renderPolyHaven() {
+  vm.dirty = true;
   if (!ph.list) return;
   [...$('#phCats').children].forEach((c, i) => c.classList.toggle('on', i === ph.cat));
   const cats = PH_CATS[ph.cat][1], q = ph.q.trim().toLowerCase();
@@ -1425,10 +1433,10 @@ addEventListener('keydown', (e) => {
 });
 
 // ───────────────────────── WebXR: VR и AR ─────────────────────────
-const xr = { session: null, mode: null, anchored: true, mini: false, hit: null, aim: null, saved: null, refType: 'local-floor' };
+const xr = { next: null, session: null, mode: null, anchored: true, mini: false, hit: null, aim: null, saved: null, refType: 'local-floor' };
 const xray = new THREE.Raycaster();
 const reticle = new THREE.Mesh(new THREE.RingGeometry(0.09, 0.115, 40).rotateX(-Math.PI / 2),
-  new THREE.MeshBasicMaterial({ color: 0xd9482b, depthTest: false, transparent: true }));
+  new THREE.MeshBasicMaterial({ color: 0xa61e1e, depthTest: false, transparent: true }));
 reticle.visible = false;
 reticle.renderOrder = 30;
 rig.add(reticle);
@@ -1438,51 +1446,174 @@ tpMarker.visible = false;
 tpMarker.renderOrder = 30;
 scene.add(tpMarker);
 
-let palette = null;
-function buildPalette() {
-  const g = new THREE.Group();
-  const acts = [...CATALOG.map((d) => ({ label: d.name, act: 'add:' + d.type })),
-    { label: 'Копия', act: 'dup', bg: '#1d1d1b', fg: '#fff' }, { label: '⟳ 90°', act: 'rot', bg: '#1d1d1b', fg: '#fff' },
-    { label: 'Удалить', act: 'del', bg: '#b3261e', fg: '#fff' }, { label: 'Макет ⇄ 1:1', act: 'mini', bg: '#1f6feb', fg: '#fff' },
-    { label: 'Отменить', act: 'undo', bg: '#1d1d1b', fg: '#fff' }, { label: 'Выход', act: 'exit', bg: '#1d1d1b', fg: '#fff' }];
-  const cols = 4, bw = 0.072, bh = 0.03, gap = 0.004, rows = Math.ceil(acts.length / cols);
-  const bg = new THREE.Mesh(new THREE.PlaneGeometry(cols * (bw + gap) + gap, rows * (bh + gap) + gap),
-    new THREE.MeshBasicMaterial({ color: 0xf6f1e7 }));
-  bg.position.z = -0.002;
-  g.add(bg);
-  const buttons = [];
-  acts.forEach((a, i) => {
-    const c = document.createElement('canvas');
-    c.width = 288; c.height = 120;
-    const x = c.getContext('2d');
-    x.fillStyle = a.bg || '#fffdf8';
-    x.fillRect(0, 0, 288, 120);
-    x.fillStyle = a.fg || '#1d1d1b';
-    x.textAlign = 'center'; x.textBaseline = 'middle';
-    let fs = 44;
-    do { x.font = `600 ${fs}px system-ui, sans-serif`; fs -= 2; } while (x.measureText(a.label).width > 268 && fs > 16);
-    x.fillText(a.label, 144, 62);
-    const tex = new THREE.CanvasTexture(c);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(bw, bh), new THREE.MeshBasicMaterial({ map: tex }));
-    m.position.set((i % cols - (cols - 1) / 2) * (bw + gap), ((rows - 1) / 2 - Math.floor(i / cols)) * (bh + gap), 0);
-    m.userData.act = a.act;
-    g.add(m);
-    buttons.push(m);
-  });
-  g.userData.buttons = buttons;
-  g.position.set(0, 0.17, -0.07);
-  g.rotation.x = -0.65;
-  return g;
+// ── VR-меню на левом контроллере: тот же каталог и те же инструменты, что на экране ──
+const TOOLS = [
+  ['select', 'Выбор', 'M5 3l14 8-6 2-2 6z'],
+  ['move3d', 'По осям', 'M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3'],
+  ['rotate', 'Поворот', 'M20 12a8 8 0 1 1-3-6.2M20 3v5h-5'],
+  ['pull', 'Тянуть', 'M4 14h10v6H4zM9 14V4M5 8l4-4 4 4'],
+  ['measure', 'Рулетка', 'M3 16L16 3l5 5L8 21zM7 12l2 2M10 9l2 2M13 6l2 2'],
+  ['act', 'Действие', 'M9 12V5a1.5 1.5 0 0 1 3 0v5.5m0-1a1.5 1.5 0 0 1 3 0V11m0-.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-1a6 6 0 0 1-5-2.6L4.6 15a1.5 1.5 0 0 1 2.5-1.7L9 15.5'],
+];
+const VW = 720, VH = 1110, FONT = '"Oswald", "PT Sans", system-ui, sans-serif';
+const INK = '#1b1a18', RED = '#A61E1E', CREAM = '#F6EEDB';
+const vm = { mesh: null, ctx: null, tex: null, regions: [], hover: null, dirty: true, tab: 'blanks', page: 0, imgs: new Map() };
+function vmImg(url) {
+  if (!url) return null;
+  let im = vm.imgs.get(url);
+  if (!im) {
+    im = new Image();
+    im.crossOrigin = 'anonymous';
+    im.onload = () => { vm.dirty = true; };
+    im.src = url;
+    vm.imgs.set(url, im);
+  }
+  return im.complete && im.naturalWidth ? im : null;
 }
-function paletteAction(act) {
-  if (act.startsWith('add:')) addBlank(CATALOG.find((d) => d.type === act.slice(4)));
-  else if (act === 'dup') { if (selId) duplicate(selId); }
-  else if (act === 'rot') rotateSel(-Math.PI / 2);
-  else if (act === 'del') { if (selId) removeItem(selId); }
-  else if (act === 'mini') setMini(!xr.mini);
-  else if (act === 'undo') undo();
-  else if (act === 'exit') xr.session?.end();
+function vmBuild() {
+  const c = document.createElement('canvas');
+  c.width = VW; c.height = VH;
+  vm.ctx = c.getContext('2d');
+  vm.tex = new THREE.CanvasTexture(c);
+  vm.tex.colorSpace = THREE.SRGBColorSpace;
+  vm.tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  const w = 0.3;
+  vm.mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, (w * VH) / VW),
+    new THREE.MeshBasicMaterial({ map: vm.tex, transparent: true }));
+  vm.mesh.position.set(0, 0.3, -0.1);
+  vm.mesh.rotation.x = -0.45;
+  vm.mesh.renderOrder = 40;
+}
+function vmDraw() {
+  const x = vm.ctx;
+  vm.regions = [];
+  vm.dirty = false;
+  x.clearRect(0, 0, VW, VH);
+  x.textBaseline = 'middle';
+  const card = (cx, cy, w, h, fill) => {
+    x.beginPath(); x.rect(cx + 2, cy + 2, w - 4, h - 4);
+    x.fillStyle = fill; x.fill();
+    x.strokeStyle = INK; x.lineWidth = 4; x.stroke();
+  };
+  const btn = (bx, by, w, h, act, label, o = {}) => {
+    const hov = vm.hover === act && !o.off;
+    x.globalAlpha = o.off ? 0.4 : 1;
+    x.beginPath(); x.rect(bx, by, w, h);
+    x.fillStyle = o.on ? INK : hov ? '#fff8e6' : o.bg || '#F3EAD4';
+    x.fill();
+    x.strokeStyle = hov ? RED : INK; x.lineWidth = hov ? 4 : 2; x.stroke();
+    if (label) {
+      x.fillStyle = o.on ? CREAM : o.fg || INK;
+      x.font = `600 ${o.font || 22}px ${FONT}`;
+      x.textAlign = 'center';
+      x.fillText(label.toUpperCase(), bx + w / 2, by + h / 2 + 1);
+    }
+    x.globalAlpha = 1;
+    if (!o.off) vm.regions.push({ x: bx, y: by, w, h, act });
+  };
+  const icon = (path, ix, iy, s, color, lw = 1.8) => {
+    x.save(); x.translate(ix, iy); x.scale(s, s);
+    x.strokeStyle = color; x.lineWidth = lw; x.lineCap = 'round'; x.lineJoin = 'round';
+    x.stroke(new Path2D(path));
+    x.restore();
+  };
+  const fit = (text, max) => { let t = text; while (t.length > 3 && x.measureText(t).width > max) t = t.slice(0, -2); return t === text ? t : t.trimEnd() + '…'; };
+
+  // верхняя полоса
+  card(1, 1, VW - 2, 86, '#E8DABB');
+  icon('M4 6h16v3H4zM6 9l-1.5 11M18 9l1.5 11M7 15h10', 16, 20, 2, RED, 2.4);
+  x.fillStyle = INK; x.font = `700 22px ${FONT}`; x.textAlign = 'left';
+  x.fillText('ТАБУРЕТКА', 70, 45);
+  btn(222, 16, 56, 56, 'undo', '↶', { font: 28, off: !undoStack.length });
+  btn(284, 16, 56, 56, 'redo', '↷', { font: 28, off: !redoStack.length });
+  btn(356, 16, 76, 56, 'mode:vr', 'VR', { bold: true, on: xr.mode === 'vr' });
+  btn(438, 16, 76, 56, 'mode:ar', 'AR', { bold: true, on: xr.mode === 'ar' });
+  btn(530, 16, 110, 56, 'mini', 'Макет', { on: xr.mini });
+  btn(648, 16, 56, 56, 'exit', '✕', { fg: RED });
+
+  // каталог
+  card(1, 102, VW - 2, 846, '#EBDFC3');
+  btn(20, 118, 176, 54, 'tab:blanks', 'Болванки', { on: vm.tab === 'blanks', r: 12 });
+  btn(196, 118, 236, 54, 'tab:web', 'Модели из сети', { on: vm.tab === 'web', r: 12 });
+  let list = [], y0 = 190;
+  if (vm.tab === 'blanks') {
+    list = CATALOG.map((d) => ({ act: 'add:' + d.type, name: d.name, sub: `${cm(d.w)}×${cm(d.d)}×${cm(d.h)}`, img: blankThumbs[d.type] }));
+  } else {
+    let cx = 20, cy = 190;
+    x.font = `500 19px ${FONT}`;
+    PH_CATS.forEach(([label], i) => {
+      const w = Math.ceil(x.measureText(label).width) + 30;
+      if (cx + w > VW - 20) { cx = 20; cy += 50; }
+      btn(cx, cy, w, 42, 'cat:' + i, label, { on: ph.cat === i, r: 21, font: 19 });
+      cx += w + 8;
+    });
+    y0 = cy + 56;
+    if (ph.list) {
+      const cats = PH_CATS[ph.cat][1];
+      list = ph.list.filter((m) => !cats || m.cats.some((c) => cats.includes(c))).map((m) => ({
+        act: 'ph:' + m.id, name: m.name, sub: m.dim ? m.dim.map((v) => Math.round(v / 10)).join('×') : '',
+        img: `https://cdn.polyhaven.com/asset_img/thumbs/${encodeURIComponent(m.id)}.png?width=200&height=150` }));
+    } else {
+      x.fillStyle = '#5a5147'; x.font = 'italic 22px "PT Serif", Georgia, serif'; x.textAlign = 'center';
+      x.fillText('Загружаю каталог…', VW / 2, y0 + 80);
+    }
+  }
+  const per = 9, pages = Math.max(1, Math.ceil(list.length / per));
+  vm.page = clamp(vm.page, 0, pages - 1);
+  vm.names = {};
+  list.slice(vm.page * per, vm.page * per + per).forEach((t, i) => {
+    const tx = 20 + (i % 3) * 230, ty = y0 + Math.floor(i / 3) * 200;
+    btn(tx, ty, 220, 190, t.act, '', {});
+    vm.names[t.act] = t.name;
+    const im = vmImg(t.img);
+    if (im) x.drawImage(im, tx + 35, ty + 8, 150, 112);
+    x.textAlign = 'center';
+    x.fillStyle = INK; x.font = `500 19px ${FONT}`;
+    x.fillText(fit(t.name.toUpperCase(), 204), tx + 110, ty + 140);
+    x.fillStyle = '#5a5147'; x.font = '15px "PT Mono", ui-monospace, monospace';
+    x.fillText(t.sub, tx + 110, ty + 166);
+  });
+  btn(20, 884, 96, 50, 'page:-1', '◀', { off: vm.page <= 0 });
+  btn(VW - 116, 884, 96, 50, 'page:1', '▶', { off: vm.page >= pages - 1 });
+  x.fillStyle = INK; x.font = '20px "PT Mono", ui-monospace, monospace'; x.textAlign = 'center';
+  x.fillText(`${vm.page + 1} / ${pages}`, VW / 2, 910);
+
+  // инструменты
+  card(1, 962, VW - 2, 146, '#EBDFC3');
+  TOOLS.forEach(([id, label, path], i) => {
+    const bx = 14 + i * 116, on = tool === id;
+    btn(bx, 974, 110, 122, 'tool:' + id, '', { on });
+    icon(path, bx + 55 - 26, 986, 2.2, on ? CREAM : INK);
+    x.fillStyle = on ? CREAM : INK; x.font = `600 16px ${FONT}`; x.textAlign = 'center';
+    x.fillText(label.toUpperCase(), bx + 55, 1070);
+  });
+  vm.tex.needsUpdate = true;
+}
+function vmHit(R) {
+  const m = vm.mesh;
+  if (!m || !m.parent || !m.visible || !m.parent.visible) return null;
+  xray.ray.copy(R);
+  const h = xray.intersectObject(m, false)[0];
+  if (!h || !h.uv) return null;
+  const px = h.uv.x * VW, py = (1 - h.uv.y) * VH;
+  const r = vm.regions.find((q) => px >= q.x && px <= q.x + q.w && py >= q.y && py <= q.y + q.h);
+  return { act: r ? r.act : null, dist: h.distance };
+}
+function vmAction(act) {
+  if (!act) return;
+  const [k, v] = act.split(/:(.*)/);
+  if (k === 'tab') { vm.tab = v; vm.page = 0; if (v === 'web') openPolyHaven(); }
+  else if (k === 'cat') { ph.cat = +v; vm.page = 0; renderPolyHaven(); }
+  else if (k === 'page') vm.page += +v;
+  else if (k === 'add') addBlank(CATALOG.find((d) => d.type === v));
+  else if (k === 'ph') addModel(act, vm.names?.[act] || v);
+  else if (k === 'tool') setTool(v);
+  else if (k === 'undo') undo();
+  else if (k === 'redo') redo();
+  else if (k === 'mini') setMini(!xr.mini);
+  else if (k === 'exit') xr.session?.end();
+  else if (k === 'mode' && v !== xr.mode) { xr.next = v; xr.session?.end(); }
+  vm.dirty = true;
 }
 
 const ctrls = [];
@@ -1490,16 +1621,19 @@ function setupControllers() {
   const factory = new XRControllerModelFactory();
   for (let i = 0; i < 2; i++) {
     const c = renderer.xr.getController(i);
-    c.userData = { src: null, grab: null, start: false, end: false, squeeze: false, turned: false };
+    c.userData = { src: null, grab: null, start: false, end: false, squeeze: false, turned: false, btn: [], rotId: null };
     const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 0, -1)]),
       new THREE.LineBasicMaterial({ color: 0x1f6feb }));
     line.scale.z = 4;
     line.visible = false;
+    c.userData.line = line;
     c.add(line);
     c.addEventListener('connected', (e) => {
       c.userData.src = e.data;
-      line.visible = e.data.targetRayMode === 'tracked-pointer';
-      if (e.data.handedness === 'left' && e.data.targetRayMode === 'tracked-pointer') { if (!palette) palette = buildPalette(); c.add(palette); }
+      const tracked = e.data.targetRayMode === 'tracked-pointer';
+      line.visible = tracked;
+      if (tracked && e.data.handedness === 'left') { if (!vm.mesh) vmBuild(); c.add(vm.mesh); vm.dirty = true; }
+      if (tracked && xr.mode === 'ar' && !xr.anchored) { xr.anchored = true; updateXRVis(); }   // шлем: пол уже известен
     });
     c.addEventListener('disconnected', () => {
       const u = c.userData;
@@ -1537,50 +1671,32 @@ function teleport(c) {
   rig.position.x += p.x - h.x;
   rig.position.z += p.z - h.z;
 }
-function paletteHit(R) {
-  if (!palette || !palette.parent || !palette.parent.visible) return null;
-  xray.ray.copy(R);
-  const h = xray.intersectObjects(palette.userData.buttons, false)[0];
-  return h ? h.object : null;
-}
+// Курок: первое нажатие выделяет предмет, нажатие по уже выделенному — тащит (или работает активный инструмент).
 function xrSelectStart(c, R) {
   if (xr.mode === 'ar' && !xr.anchored) { if (xr.aim) anchorWorld(xr.aim); return; }
   if (!c.visible) return;
-  const btn = paletteHit(R);
-  if (btn) { paletteAction(btn.userData.act); return; }
+  const reg = vmHit(R);
+  if (reg) { vmAction(reg.act); return; }
   ray.ray.copy(R);
+  if (tool === 'measure') { measureTap(); return; }
+  if (tool === 'act') { const pk = pickItem(); if (pk) tapPart(pk); return; }
+  const d = beginDrag(localRay(R), false);
+  if (d) { d.t0 = performance.now(); c.userData.grab = d; return; }
   const pk = pickItem();
-  if (!pk) { select(null); return; }
-  select(pk.id);
-  const it = item(pk.id);
-  world.updateMatrixWorld(true);
-  const pl = world.worldToLocal(pk.point);
-  c.userData.grab = makeGrab(it, pl);
-  Object.assign(c.userData.grab, { pk, t0: performance.now(), moved: false });
+  select(pk ? pk.id : null);
 }
-function xrDrag(c, R, dt) {
-  const g = c.userData.grab, it = item(g.id);
-  if (!it) { c.userData.grab = null; return; }
-  if (c.visible) {
-    const bx = it.x, by = it.y, bz = it.z;
-    if (!it.lock && (g.moved || performance.now() - g.t0 > 220) && dragMove(it, g, localRay(R))) g.changed = true;
-    if (Math.abs(it.x - bx) + Math.abs(it.y - by) + Math.abs(it.z - bz) > 1e-4) g.moved = true;
-  }
-  const ax = c.userData.src?.gamepad?.axes;
-  const sx = ax ? (Math.abs(ax[2] ?? 0) > Math.abs(ax[0] ?? 0) ? ax[2] : ax[0]) || 0 : 0;
-  if (Math.abs(sx) > 0.35 && !it.lock) { it.rot -= sx * dt * 1.8; g.changed = g.turned = g.moved = true; }
-  placeItem(it);
-  gizmo.position.set(it.x, it.y, it.z);
-  gizmo.rotation.y = it.rot;
+function xrDrag(c, R) {
+  const g = c.userData.grab;
+  if (!c.visible || (g.mode === 'move' && performance.now() - g.t0 < 200)) return;
+  ray.ray.copy(R);
+  updateDrag(g, localRay(R));
 }
 function xrSelectEnd(c) {
   const g = c.userData.grab;
   c.userData.grab = null;
   if (!g) return;
-  const it = item(g.id);
-  if (it && g.turned) { it.rot = snapRot(it.rot); placeItem(it); updateGizmo(); }
-  if (it && !g.moved && performance.now() - g.t0 < 350) tapPart(g.pk);
-  if (g.changed) commit();
+  if (g.changed) { commit(); vm.dirty = true; }
+  else if (g.mode === 'move' && g.pk && performance.now() - g.t0 < 300) tapPart(g.pk);
 }
 function updateAim(frame) {
   let p = null;
@@ -1608,7 +1724,7 @@ function setMini(on) {
   xr.mini = on;
   const R = state.room;
   world.scale.setScalar(on ? Math.min(0.2, 0.9 / Math.max(R.w, R.d, 1)) : 1);
-  if (xr.mode === 'vr') {
+  if (xr.mode === 'vr' || ctrls.some((c) => c.userData.src?.targetRayMode === 'tracked-pointer')) {
     if (on) {
       const h = camera.getWorldPosition(new THREE.Vector3()), f = camera.getWorldDirection(new THREE.Vector3());
       f.y = 0; f.normalize();
@@ -1627,6 +1743,7 @@ function updateXRVis() {
   world.visible = !ar || xr.anchored;
   const b = $('[data-xr="mini"]');
   if (b) b.textContent = xr.mini ? 'Размер 1:1' : 'Макет';
+  vm.dirty = true;
 }
 function updateXRHint() {
   if (xr.mode !== 'ar') return;
@@ -1634,50 +1751,91 @@ function updateXRHint() {
   $('#xrHint').textContent = !xr.anchored ? 'Наведите прицел на пол и коснитесь экрана — сюда встанет центр комнаты'
     : it ? `${it.name}: тащите пальцем, ⟲ ⟳ — поворот` : 'Коснитесь предмета, чтобы выбрать. ⟲ ⟳ поворачивают всю комнату';
 }
-function locomotion(dt) {
-  if (xr.mode !== 'vr') return;
+// Стики и кнопки. Правый стик ←→ вращает выделенный предмет; A — «Тянуть», B — «Рулетка»;
+// X — отмена, Y — спрятать меню. В сквозном режиме (AR) ходьбы нет: левый стик аккуратно двигает
+// саму комнату, правый (когда ничего не выделено) — поворачивает её.
+function sticks(dt) {
   for (const c of ctrls) {
-    const u = c.userData, src = u.src;
-    if (u.squeeze && c.visible) {
+    const u = c.userData, src = u.src, gp = src?.gamepad;
+    if (xr.mode === 'vr' && u.squeeze && c.visible) {
       const p = floorPoint(ctrlRay(c));
       tpMarker.visible = !!p;
       if (p) tpMarker.position.copy(p).setY(p.y + 0.01);
     }
-    const ax = src?.gamepad?.axes;
-    if (!ax || u.grab) continue;
+    if (!gp || src.targetRayMode !== 'tracked-pointer') continue;
+    const hand = src.handedness, edge = (i) => { const p = !!gp.buttons[i]?.pressed, was = !!u.btn[i]; u.btn[i] = p; return p && !was; };
+    const a = edge(4), b = edge(5);
+    if (hand === 'right') {
+      if (a) setTool(tool === 'pull' ? 'select' : 'pull');
+      if (b) setTool(tool === 'measure' ? 'select' : 'measure');
+    } else if (hand === 'left') {
+      if (a) undo();
+      if (b && vm.mesh) vm.mesh.visible = !vm.mesh.visible;
+    }
+    const ax = gp.axes;
     const x = (Math.abs(ax[2] ?? 0) > Math.abs(ax[0] ?? 0) ? ax[2] : ax[0]) || 0;
     const y = (Math.abs(ax[3] ?? 0) > Math.abs(ax[1] ?? 0) ? ax[3] : ax[1]) || 0;
-    if (src.handedness === 'left') {
-      if (Math.hypot(x, y) < 0.2) continue;
+    if (hand === 'right') {
+      const it = sel();
+      if (u.rotId && (!it || it.id !== u.rotId || Math.abs(x) <= 0.35)) {
+        const r = item(u.rotId);
+        u.rotId = null;
+        if (r) { r.rot = snapRot(r.rot); placeItem(r); updateGizmo(); commit(); }
+      }
+      if (it && !it.lock) {
+        if (Math.abs(x) > 0.35) { it.rot -= x * dt * 1.8; u.rotId = it.id; placeItem(it); gizmo.rotation.y = it.rot; }
+      } else if (xr.mode === 'vr') {
+        if (Math.abs(x) > 0.6) {
+          if (!u.turned) {
+            u.turned = true;
+            const an = -Math.sign(x) * Math.PI / 6, h = camera.getWorldPosition(new THREE.Vector3());
+            rig.position.sub(h).applyAxisAngle(THREE.Object3D.DEFAULT_UP, an).add(h);
+            rig.rotation.y += an;
+          }
+        } else if (Math.abs(x) < 0.3) u.turned = false;
+      } else if (Math.abs(x) > 0.35) world.rotation.y -= x * dt * 0.5;
+    } else if (hand === 'left' && Math.hypot(x, y) > 0.25) {
       const f = camera.getWorldDirection(new THREE.Vector3());
       f.y = 0; f.normalize();
       const r = new THREE.Vector3(-f.z, 0, f.x);
-      rig.position.addScaledVector(f, -y * 1.6 * dt).addScaledVector(r, x * 1.6 * dt);
-    } else if (Math.abs(x) > 0.6) {
-      if (u.turned) continue;
-      u.turned = true;
-      const a = -Math.sign(x) * Math.PI / 6, h = camera.getWorldPosition(new THREE.Vector3());
-      rig.position.sub(h).applyAxisAngle(THREE.Object3D.DEFAULT_UP, a).add(h);
-      rig.rotation.y += a;
-    } else if (Math.abs(x) < 0.3) u.turned = false;
+      if (xr.mode === 'vr') rig.position.addScaledVector(f, -y * 1.6 * dt).addScaledVector(r, x * 1.6 * dt);
+      else world.position.addScaledVector(f, -y * 0.4 * dt).addScaledVector(r, x * 0.4 * dt);
+    }
   }
 }
+const lastAim = new THREE.Vector3(1e9, 0, 0);
 function xrTick(frame, dt) {
   rig.updateMatrixWorld(true);
   updateAim(frame);
+  let hover = null, aimed = false;
   for (const c of ctrls) {
     const u = c.userData;
     const R = ctrlRay(c);
     if (u.start) { u.start = false; xrSelectStart(c, R); }
-    if (u.grab) xrDrag(c, R, dt);
-    else if (palette?.parent) {
-      const hb = paletteHit(R);
-      for (const b of palette.userData.buttons) if (b.userData.hover === c) { b.userData.hover = null; b.material.color.set(0xffffff); }
-      if (hb) { hb.userData.hover = c; hb.material.color.set(0x9cc4ff); }
+    if (u.grab) xrDrag(c, R);
+    else if (c.visible && u.src?.targetRayMode === 'tracked-pointer') {
+      const reg = vmHit(R);
+      u.line.scale.z = reg && reg.dist ? reg.dist : 4;
+      if (reg) hover = reg.act || hover;
+      else if (tool === 'measure' && !aimed && u.src.handedness !== 'left') {   // метка привязки под лучом
+        aimed = true;
+        ray.ray.copy(R);
+        const m = measurePoint();
+        showSnap(m);
+        if (m && m.p.distanceTo(lastAim) > 0.004) {
+          lastAim.copy(m.p);
+          clearGroup(tmpG);
+          if (measureA) dimObjects(tmpG, measureA, m.p);
+        }
+      }
     }
     if (u.end) { u.end = false; xrSelectEnd(c); }
   }
-  locomotion(dt);
+  if (hover !== vm.hover) { vm.hover = hover; vm.dirty = true; }
+  sticks(dt);
+  if (vm.mesh && vm.mesh.parent && vm.mesh.visible && vm.dirty) {
+    try { vmDraw(); } catch (e) { vm.dirty = false; console.error('vr menu', e); }
+  }
 }
 
 async function startXR(mode) {
@@ -1745,6 +1903,9 @@ function onXREnd() {
   controls3d.enabled = view === '3d';
   updateXRVis();
   setTimeout(() => { resize(); updateProps(); }, 60);
+  const next = xr.next;
+  xr.next = null;
+  if (next) startXR(next);              // переключение VR ⇄ AR из меню в шлеме
 }
 $('#xr-overlay').addEventListener('beforexrselect', (e) => { if (e.target !== e.currentTarget) e.preventDefault(); });
 $('#xrBar').onclick = (e) => {
@@ -1789,6 +1950,9 @@ $('#btnAR').onclick = () => startXR('ar');
 $('#btnQL').onclick = quickLook;
 
 // ───────────────────────── запуск ─────────────────────────
+window.__taburetka = { vm, vmBuild, vmDraw };
+document.fonts?.load('600 20px Oswald').then(() => { vm.dirty = true; });
+document.fonts?.load('20px "PT Mono"').then(() => { vm.dirty = true; rebuildDims(); });
 function boot() {
   let data = null;
   const m = location.hash.match(/[#&]p=([\w-]+)/);
