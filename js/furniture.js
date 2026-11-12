@@ -187,10 +187,15 @@ export function seatOf(type, h, p) {
   if (!fn) return null;
   return p && p.seat > 0 ? Math.max(0.14, Math.min(p.seat, h - 0.06)) : fn(h);
 }
+// Размеры частей дивана и кресла: по умолчанию от габарита, либо заданные вручную (p.seat, p.arm, p.backd).
+export function sofaDims(w, d, h, p = {}) {
+  const seat = seatOf('sofa', h, p), baseH = seat - 0.12, armW = Math.min(0.18, w * 0.16);
+  const backD = p.backd > 0 ? Math.max(0.06, Math.min(p.backd, d - 0.3)) : Math.min(0.22, d * 0.26);
+  const armTop = p.arm > 0 ? Math.max(baseH + 0.03, Math.min(p.arm, h)) : baseH + Math.max(0.05, Math.min(h - baseH - 0.12, 0.3));
+  return { seat, baseH, armW, backD, armTop, armH: armTop - baseH };
+}
 function sofa(b, w, d, h, o = {}) {    // диван и кресло: сиденье выдвигается вперёд, вся глубина становится около 2 м
-  const baseH = seatOf('sofa', h, o.p) - 0.12;
-  const armW = Math.min(0.18, w * 0.16), backD = Math.min(0.22, d * 0.26);
-  const armH = Math.max(0.05, Math.min(h - baseH - 0.12, 0.3));
+  const { baseH, armW, backD, armH } = sofaDims(w, d, h, o.p || {});
   b.box(w, baseH, d, 0, 0, 0, b.m2);
   b.box(w, h - baseH, backD, 0, baseH, -d / 2 + backD / 2);
   for (const s of [-1, 1]) b.box(armW, armH, d - backD, s * (w / 2 - armW / 2), baseH, backD / 2);
