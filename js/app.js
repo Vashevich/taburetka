@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=13';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=14';
 
 const STORE = 'taburetka.project.v1';
 
@@ -49,7 +49,7 @@ sun.castShadow = true;
 sun.shadow.mapSize.set(1024, 1024);
 Object.assign(sun.shadow.camera, { left: -9, right: 9, top: 9, bottom: -9, near: 0.5, far: 40 });
 sun.shadow.bias = -0.0005;
-scene.add(sun);
+world.add(sun, sun.target);             // свет живёт в координатах комнаты и едет вместе с ней
 
 const ground = new THREE.Mesh(new THREE.CircleGeometry(60, 48),
   new THREE.MeshStandardMaterial({ color: '#DCCFAE', roughness: 1 }));
@@ -92,6 +92,7 @@ function normalize(d) {
       w: clamp(num(room.w, 4), 0.5, 50), d: clamp(num(room.d, 5), 0.5, 50), h: clamp(num(room.h, 2.7), 0.5, 20),
       floor: room.floor || '#d9c7a8', wall: room.wall || '#f4f1ea',
       ...(validCeil(room.ceil) ? { ceil: JSON.parse(JSON.stringify(room.ceil)) } : {}),
+      ...(room.sun && Number.isFinite(room.sun.az) && Number.isFinite(room.sun.el) ? { sun: { az: room.sun.az, el: room.sun.el } } : {}),
     },
     snap: num(d.snap, 0.05),
     dims: Array.isArray(d.dims) ? d.dims.filter((m) => m && m.a && m.b) : [],
@@ -147,7 +148,7 @@ function load(data) {
 }
 
 // ───────────────────────── комната ─────────────────────────
-let floorMesh, wallMesh, gridLines, wallEdges, outline;
+let floorMesh, wallMesh, gridLines, wallEdges, outline, shadowFloor;
 function disposeChildren(g) {
   const shared = g.userData.shared;
   for (const c of [...g.children]) {
@@ -215,6 +216,16 @@ function resetCeil() {
   delete state.room.ceil;
   buildRoom(); updateGizmo(); commit();
 }
+// Направление света хранится в комнате: азимут и высота солнца над горизонтом.
+function sunDir() {
+  const q = state.room.sun || { az: 0.695, el: 0.856 };
+  return { az: q.az, el: clamp(q.el, 0.12, 1.5) };
+}
+function applySun() {
+  const { az, el } = sunDir(), r = 14;
+  sun.position.set(r * Math.cos(el) * Math.sin(az), r * Math.sin(el), r * Math.cos(el) * Math.cos(az));
+  sun.target.position.set(0, 0, 0);
+}
 function buildRoom() {
   disposeChildren(roomG);
   const { w, d, floor, wall } = state.room;
@@ -253,8 +264,14 @@ function buildRoom() {
     new THREE.LineBasicMaterial({ color: 0xa61e1e }));
   outline.position.y = 0.004;
 
-  for (const m of [floorMesh, gridLines, wallMesh, wallEdges, outline]) m.raycast = () => {};
-  roomG.add(floorMesh, gridLines, wallMesh, wallEdges, outline);
+  // в сквозном режиме пола нет — тени ложатся на прозрачную подложку поверх настоящего пола
+  shadowFloor = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.ShadowMaterial({ opacity: 0.28 }));
+  shadowFloor.rotation.x = -Math.PI / 2;
+  shadowFloor.position.y = 0.002;
+  shadowFloor.receiveShadow = true;
+  for (const m of [floorMesh, gridLines, wallMesh, wallEdges, outline, shadowFloor]) m.raycast = () => {};
+  roomG.add(floorMesh, gridLines, wallMesh, wallEdges, outline, shadowFloor);
+  applySun();
   updateXRVis();
 }
 
@@ -676,6 +693,17 @@ function updateGizmo() {
         mk(m.x, m.y, m.z, { room: 'node', n: [[i, j], [i2, j2]] }, 0x1f6feb, 0.007, b.sub(a));
       }
     }
+    {                                   // солнце: тяните — меняется направление света и теней
+      const q = sunDir(), y0 = R.h + 0.8, rr = clamp(y0 / Math.tan(q.el), 0.3, 14);
+      const sx = rr * Math.sin(q.az), sz = rr * Math.cos(q.az);
+      mk(sx, y0, sz, { room: 'sun' }, 0xffb300, 0.02);
+      const ln = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(sx, y0, sz), new THREE.Vector3(0, 0, 0)]),
+        new THREE.LineDashedMaterial({ color: 0xffb300, dashSize: 0.12, gapSize: 0.08, depthTest: false, transparent: true }));
+      ln.computeLineDistances();
+      ln.renderOrder = 10;
+      ln.raycast = () => {};
+      gizmo.add(ln);
+    }
     if (selPos) {                       // стрелки у выделенной точки или грани
       const hold = new THREE.Group();
       hold.position.copy(selPos);
@@ -1039,7 +1067,10 @@ function updateRoomDrag(d, lr) {
   } else {
     const p = hitPlaneY(lr, d.a0.y);
     if (!p) return false;
-    if (u.room === 'split') {           // линия излома — вдоль стены; у соседней линии или стены она исчезает
+    if (u.room === 'sun') {             // солнце ездит по плоскости над комнатой: азимут и высота
+      const rr = clamp(Math.hypot(p.x, p.z), 0.3, 14), r4 = (v) => Math.round(v * 1e4) / 1e4;
+      R.sun = { az: r4(Math.atan2(p.x, p.z)), el: r4(Math.atan2(d.a0.y, rr)) };
+    } else if (u.room === 'split') {    // линия излома — вдоль стены; у соседней линии или стены она исчезает
       const arr = u.axis === 'x' ? R.ceil.xs : R.ceil.zs, size = u.axis === 'x' ? R.w : R.d, gap = 0.1 / size;
       arr[u.k] = Math.round(clamp((sn(p[u.axis]) + size / 2) / size, (arr[u.k - 1] ?? 0) + gap, (arr[u.k + 1] ?? 1) - gap) * 1e4) / 1e4;
     } else {                            // стена: двигается только она, противоположная стоит на месте
@@ -1246,7 +1277,7 @@ canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 // ───────────────────────── интерфейс ─────────────────────────
 const HINTS = {
   select: 'Тащите предмет: он встаёт на пол или на другую мебель, у стены — поднимается по ней',
-  room: 'Комната: шарик на стене двигает эту стену. Точка или чёрточка-грань потолка: тянуть — вверх-вниз, нажать — стрелки по осям, нажать выделенную грань ещё раз — излом',
+  room: 'Комната: шарик на стене двигает эту стену. Точка или чёрточка-грань потолка: тянуть — вверх-вниз, нажать — стрелки по осям, нажать выделенную грань ещё раз — излом. Жёлтое солнце над комнатой — направление света',
   erase: 'Ластик: наведите на предмет или размер — он станет красным — и нажмите, чтобы удалить',
   act: 'Нажимайте на дверцы и ящики — они открываются и закрываются',
   move3d: 'Тащите стрелку: красная и зелёная — вдоль пола, синяя — вверх-вниз',
@@ -1474,9 +1505,10 @@ $('#menu').onclick = (e) => { const a = e.target.dataset?.act; if (a) { $('#menu
 $('#roomDlg').addEventListener('close', () => {
   if ($('#roomDlg').returnValue !== 'ok') return;
   const g = (id, def) => clamp(parseFloat($(id).value) / 100 || def, 0.5, 50);
-  const oldH = state.room.h, oldCeil = state.room.ceil;
+  const oldH = state.room.h, oldCeil = state.room.ceil, oldSun = state.room.sun;
   state.room = { w: g('#rW', state.room.w), d: g('#rD', state.room.d), h: Math.min(20, g('#rH', state.room.h)),
     floor: $('#rFloor').value, wall: $('#rWall').value };
+  if (oldSun) state.room.sun = oldSun;
   if (oldCeil) {                        // изломы сохраняются, высоты масштабируются
     const k = state.room.h / oldH;
     state.room.ceil = { xs: oldCeil.xs, zs: oldCeil.zs, h: oldCeil.h.map((col) => col.map((v) => r3(v * k))) };
@@ -1625,7 +1657,7 @@ function vmDraw() {
     x.font = '20px "PT Mono", ui-monospace, monospace'; x.fillStyle = '#5a5147';
     x.fillText(`${cm(R.w)} × ${cm(R.d)} × ${cm(R.h)} см`, 24, 180);
     x.font = 'italic 22px "PT Serif", Georgia, serif'; x.fillStyle = '#5a5147'; x.textAlign = 'left';
-    ['Шарик на стене: тяните — двигается эта стена.', '', 'Точка или чёрточка-грань на потолке:', 'тяните — вверх или вниз;', 'нажмите — появятся стрелки по осям;', 'нажмите выделенную грань ещё раз — излом.', '', 'Жёлтый шарик у пола двигает линию излома;', 'у стены или соседней линии она исчезает.']
+    ['Шарик на стене: тяните — двигается эта стена.', '', 'Точка или чёрточка-грань на потолке:', 'тяните — вверх или вниз;', 'нажмите — появятся стрелки по осям;', 'нажмите выделенную грань ещё раз — излом.', '', 'Жёлтый шарик у пола двигает линию излома;', 'у стены или соседней линии она исчезает.', '', 'Жёлтое солнце над комнатой — тяните его,', 'чтобы повернуть свет и тени.']
       .forEach((t, i) => x.fillText(t, 24, 236 + i * 36));
   } else {
   let chx = 20, chy = 116;
@@ -1918,7 +1950,7 @@ function updateXRVis() {
   ground.visible = !pass && !xr.mini;
   scene.background = pass ? null : SKY;
   floorMesh.visible = gridLines.visible = wallMesh.visible = wallEdges.visible = !bare;
-  outline.visible = bare;
+  outline.visible = shadowFloor.visible = bare;
   world.visible = !ar || xr.anchored;
   const b = $('[data-xr="mini"]');
   if (b) b.textContent = xr.mini ? 'Размер 1:1' : 'Макет';
@@ -2073,7 +2105,6 @@ async function startXR(mode) {
     xr.saved = { p: camera.position.clone(), q: camera.quaternion.clone() };
     xr.mode = mode; xr.env = mode !== 'ar'; xr.mini = false; xr.anchored = mode !== 'ar'; xr.aim = null; xr.hit = null;
     controls3d.enabled = false;
-    sun.castShadow = false;
     renderer.xr.setReferenceSpaceType(xr.refType);
     await renderer.xr.setSession(session);
     xr.session = session;
