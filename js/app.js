@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=36';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=37';
 
 const STORE = 'taburetka.project.v1';
 
@@ -76,16 +76,27 @@ const sel = () => (selId ? item(selId) : null);
 
 function demo() {
   const pick = (t) => CATALOG.find((c) => c.type === t);
-  const mk = (t, x, z, rot = 0) => {
+  const mk = (t, x, z, rot = 0, y) => {
     const c = pick(t);
-    return { id: uid(), type: t, name: c.name, w: c.w, d: c.d, h: c.h, x, z, y: c.y || 0, rot, color: c.color, ...(c.y ? { hold: 'wall' } : {}) };
+    return { id: uid(), type: t, name: c.name, w: c.w, d: c.d, h: c.h, x, z, y: y ?? (c.y || 0), rot, color: c.color, ...(c.y ? { hold: 'wall' } : {}) };
+  };
+  // Стартовая комната буквой «Г»: над столом скошенный потолок, в выступе подиум —
+  // сразу видно, что стены, пол и потолок лепятся инструментом «Комната».
+  const P = 0.15, H = 2.7, L = 1.8;
+  const mesh = {
+    v: [[-2.5, 0, -2.5], [2.5, 0, -2.5], [2.5, 0, 0.5], [0, 0, 0.5], [-2.5, 0, 0.5],
+      [-2.5, P, 0.5], [0, P, 0.5], [0, P, 2.5], [-2.5, P, 2.5],
+      [-2.5, H, -2.5], [1.2, H, -2.5], [2.5, L, -2.5], [2.5, L, 0.5], [1.2, H, 0.5], [0, H, 0.5], [0, H, 2.5], [-2.5, H, 2.5]],
+    f: [[0, 4, 3, 2, 1], [5, 8, 7, 6], [3, 4, 5, 6],            // пол, подиум, ступенька
+      [9, 10, 13, 14, 15, 16], [10, 11, 12, 13],                 // потолок и скос
+      [0, 1, 11, 10, 9], [1, 2, 12, 11], [2, 3, 6, 14, 13, 12],  // стены
+      [6, 7, 15, 14], [7, 8, 16, 15], [8, 5, 4, 0, 9, 16]],
   };
   return {
-    v: 1, room: { ...state.room }, snap: 0.05, dims: [],
-    // стартовая комната: немного мебели, дверь и окно — видно, что всё можно двигать и открывать
-    items: [mk('bed', -1.2, -1.45), mk('nightstand', -0.15, -2.3), mk('window', 0.95, -2.45),
-      mk('wardrobe', -1.7, 1.6, Math.PI / 2), mk('desk', 1.7, -0.6, -Math.PI / 2), mk('chair', 1.1, -0.6, Math.PI / 2),
-      mk('door', 1.95, 1.7, -Math.PI / 2), mk('rug', 0.1, 0.7), mk('stool', 0.2, 0.9)],
+    v: 1, room: { w: 5, d: 5, h: H, floor: state.room.floor, wall: state.room.wall, mesh }, snap: 0.05, dims: [],
+    items: [mk('bed', -1.7, -1.45), mk('nightstand', -0.65, -2.3), mk('window', 0.6, -2.45),
+      mk('desk', 2.2, -1.0, -Math.PI / 2), mk('chair', 1.6, -1.0, Math.PI / 2), mk('door', 1.5, 0.45, Math.PI),
+      mk('rug', 0.4, -0.5), mk('wardrobe', -2.2, 1.5, Math.PI / 2, P), mk('stool', -1.2, 2.0, 0, P), mk('human', -0.7, 1.2, 0, P)],
   };
 }
 
