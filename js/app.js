@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=29';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=30';
 
 const STORE = 'taburetka.project.v1';
 
@@ -959,6 +959,8 @@ function updateConstSize() {
   world.updateMatrixWorld(true);
   const cl = world.worldToLocal(c.getWorldPosition(new THREE.Vector3()));
   for (const g of [dimsG, tmpG]) for (const o of g.children) {
+    if (o.userData.bar) { const t = inXR ? 0.004 : 0.0022 * viewHeightAt(o); o.scale.set(t, o.userData.len, t); continue; }
+    if (o.userData.dot) { o.scale.setScalar(inXR ? 0.011 : 0.0058 * viewHeightAt(o)); continue; }
     if (!o.userData.label) continue;
     const s = inXR ? 0.055 : 0.034 * viewHeightAt(o);
     o.scale.set(s * o.userData.aspect, s, 1);
@@ -978,7 +980,8 @@ function pickHandle() {
 }
 
 // ───────────────────────── рулетка ─────────────────────────
-const DIM = new THREE.LineBasicMaterial({ color: 0xa61e1e, depthTest: false, transparent: true });
+const DIM = new THREE.MeshBasicMaterial({ color: 0xa61e1e, depthTest: false, transparent: true });
+const BAR_GEO = new THREE.CylinderGeometry(1, 1, 1, 8), DOT_GEO = new THREE.SphereGeometry(1, 14, 10);
 let measureA = null;
 const LABEL_GEO = new THREE.PlaneGeometry(1, 1);
 function makeLabel(text) {
@@ -1002,17 +1005,31 @@ function makeLabel(text) {
   sp.raycast = () => {};
   return sp;
 }
-function dimObjects(group, a, b) {
-  const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, b]), DIM);
-  line.renderOrder = 19;
-  const lab = makeLabel(fmt(a.distanceTo(b)));
+function dimObjects(group, a, b) {       // жирная линия размера с точками на концах и табличкой
+  const dir = b.clone().sub(a), len = dir.length();
+  const bar = new THREE.Mesh(BAR_GEO, DIM);
+  bar.position.copy(a).add(b).multiplyScalar(0.5);
+  if (len > 1e-6) bar.quaternion.setFromUnitVectors(THREE.Object3D.DEFAULT_UP, dir.clone().multiplyScalar(1 / len));
+  bar.userData = { bar: true, len };
+  bar.renderOrder = 19;
+  bar.raycast = () => {};
+  group.add(bar);
+  for (const p of [a, b]) {
+    const dot = new THREE.Mesh(DOT_GEO, DIM);
+    dot.position.copy(p);
+    dot.userData = { dot: true };
+    dot.renderOrder = 19;
+    dot.raycast = () => {};
+    group.add(dot);
+  }
+  const lab = makeLabel(fmt(len));
   lab.position.copy(a).add(b).multiplyScalar(0.5);
-  group.add(line, lab);
+  group.add(lab);
 }
 function clearGroup(g) {
   for (const c of [...g.children]) {
     g.remove(c);
-    if (c.geometry !== LABEL_GEO) c.geometry?.dispose();
+    if (c.geometry !== LABEL_GEO && c.geometry !== BAR_GEO && c.geometry !== DOT_GEO) c.geometry?.dispose();
     if (c.material !== DIM) { c.material?.map?.dispose(); c.material?.dispose(); }
   }
 }
@@ -1080,8 +1097,15 @@ function doErase(t) {
 // иначе — точка на поверхности или на полу (по сетке).
 const SNAP_COL = { corner: 0x2e9e4f, vertex: 0x1f6feb, free: 0xa61e1e };
 const SNAP_NAME = { corner: 'угол', vertex: 'вершина', free: '' };
-const snapMarker = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12),
+// метка привязки — крестик по трём осям: видно, от какой точки и вдоль чего пойдёт размер
+const snapMarker = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.2, 0.2),
   new THREE.MeshBasicMaterial({ color: SNAP_COL.free, depthTest: false, transparent: true }));
+for (const sz of [[0.2, 3.2, 0.2], [0.2, 0.2, 3.2]]) {
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(...sz), snapMarker.material);
+  arm.renderOrder = 25;
+  arm.raycast = () => {};
+  snapMarker.add(arm);
+}
 snapMarker.renderOrder = 25;
 snapMarker.visible = false;
 snapMarker.raycast = () => {};
@@ -1093,7 +1117,7 @@ function showSnap(m) {
   if (!m) return;
   snapMarker.position.copy(m.p);
   snapMarker.material.color.set(SNAP_COL[m.kind]);
-  snapMarker.userData.cs = (m.kind === 'free' ? 0.006 : 0.011) * (coarse ? 1.5 : 1);
+  snapMarker.userData.cs = (m.kind === 'free' ? 0.007 : 0.01) * (coarse ? 1.5 : 1);
 }
 function itemCorners(it, out) {
   const c = Math.cos(it.rot), s = Math.sin(it.rot);
