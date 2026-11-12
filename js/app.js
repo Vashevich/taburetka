@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=19';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=20';
 
 const STORE = 'taburetka.project.v1';
 
@@ -721,7 +721,7 @@ function setHot(h) {
   if (t === hot) return;
   if (hot && hot.userData.mat) hot.userData.mat.color.set(hot.userData.col);
   hot = t;
-  if (hot && hot.userData.mat) hot.userData.mat.color.set(0xffc400);
+  if (hot && hot.userData.mat) hot.userData.mat.color.set(0x1b1a18);   // под курсором — чёрная, размер прежний
 }
 function updateGizmo() {
   hot = null;
@@ -825,8 +825,8 @@ function viewHeightAt(obj) {
   return (_v.distanceTo(_c) * 2 * Math.tan(THREE.MathUtils.degToRad(c.fov / 2))) / ws;
 }
 function updateConstSize() {
-  for (const h of handles) if (h.userData.cs) h.scale.setScalar(h.userData.cs * viewHeightAt(h) * (h === hot ? 1.5 : 1));
-  for (const a of arrows) a.scale.setScalar((coarse ? 0.16 : 0.12) * viewHeightAt(a) * (a === hot ? 1.25 : 1));
+  for (const h of handles) if (h.userData.cs) h.scale.setScalar(h.userData.cs * viewHeightAt(h));
+  for (const a of arrows) a.scale.setScalar((coarse ? 0.16 : 0.12) * viewHeightAt(a));
   if (cutMarker.visible) cutMarker.scale.setScalar((coarse ? 0.014 : 0.009) * viewHeightAt(cutMarker));
   if (snapMarker.visible) snapMarker.scale.setScalar((snapMarker.userData.cs || 0.01) * viewHeightAt(snapMarker));
   // Таблички размеров: на экране — постоянный экранный размер, лицом к камере;
