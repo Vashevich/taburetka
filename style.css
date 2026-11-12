@@ -201,3 +201,4 @@ dialog::backdrop { background: rgba(232, 218, 187, .72); }
 #xrHint { border-radius: 0; background: rgba(27, 26, 24, .88); color: var(--accent-ink); font: italic 14px/1.3 var(--f-serif); }
 #xrBar button { background: var(--card); }
 #xrBar button.primary { background: var(--accent); }
+.row label input[type=number] { font-size: 13px; padding-left: 6px; padding-right: 22px; }

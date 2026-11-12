@@ -6,7 +6,7 @@ import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, fillBlank, applyAct, EDGE } from './furniture.js?v=5';
+import { CATALOG, fillBlank, applyAct, EDGE } from './furniture.js?v=6';
 
 const LIBS = 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/';
 const KHR = 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/';
