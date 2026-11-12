@@ -1,20 +1,9 @@
 // Табуретка — планировщик комнаты: 3D в браузере, VR и AR через WebXR.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
-import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
-import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, fillBlank, applyAct, EDGE } from './furniture.js?v=6';
+import { CATALOG, fillBlank, applyAct, EDGE } from './furniture.js?v=7';
 
-const LIBS = 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/';
-const KHR = 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/';
-const SAMPLES = [
-  ['Стул', 'SheenChair'], ['Бархатный диван', 'GlamVelvetSofa'], ['Диван кожа/дерево', 'SheenWoodLeatherSofa'],
-  ['Кресло', 'ChairDamaskPurplegold'], ['Лампа', 'IridescenceLamp'], ['Фонарь', 'AnisotropyBarnLamp'],
-  ['Растение', 'DiffuseTransmissionPlant'], ['Холодильник', 'CommercialRefrigerator'],
-].map(([name, id]) => ({ name, url: `${KHR}${id}/glTF-Binary/${id}.glb`, shot: `${KHR}${id}/screenshot/screenshot.jpg` }));
 const STORE = 'taburetka.project.v1';
 
 const $ = (s) => document.querySelector(s);
@@ -100,7 +89,7 @@ function normalize(d) {
     },
     snap: num(d.snap, 0.05),
     dims: Array.isArray(d.dims) ? d.dims.filter((m) => m && m.a && m.b) : [],
-    items: (Array.isArray(d.items) ? d.items : []).filter((i) => i && i.type).map((i) => ({
+    items: (Array.isArray(d.items) ? d.items : []).filter((i) => i && i.type && i.type !== 'model').map((i) => ({
       ...i, id: i.id || uid(), name: String(i.name || 'Предмет'),
       w: Math.max(0.01, num(i.w, 0.6)), d: Math.max(0.01, num(i.d, 0.6)), h: Math.max(0.005, num(i.h, 0.6)),
       x: num(i.x, 0), z: num(i.z, 0), y: num(i.y, 0), rot: num(i.rot, 0),
@@ -200,126 +189,9 @@ function buildRoom() {
 }
 
 // ───────────────────────── предметы ─────────────────────────
-const modelCache = new Map();           // src → {promise} | {scene,size,offset,fit} | {error}
-let gltfLoader = null;
-function getGLTFLoader() {
-  if (gltfLoader) return gltfLoader;
-  gltfLoader = new GLTFLoader();
-  try {
-    gltfLoader.setDRACOLoader(new DRACOLoader().setDecoderPath(LIBS + 'draco/gltf/'));
-    gltfLoader.setKTX2Loader(new KTX2Loader().setTranscoderPath(LIBS + 'basis/').detectSupport(renderer));
-    gltfLoader.setMeshoptDecoder(MeshoptDecoder);
-  } catch (e) { console.warn(e); }
-  return gltfLoader;
-}
-const extOf = (s) => ((String(s).split(/[?#]/)[0].match(/\.([a-z0-9]+)$/i) || [])[1] || '').toLowerCase();
-
-const getJSON = async (url) => {
-  for (let i = 0; ; i++) {
-    try { const r = await fetch(url); if (!r.ok) throw new Error('HTTP ' + r.status); return await r.json(); }
-    catch (e) { if (i >= 2) throw e; await new Promise((res) => setTimeout(res, 600)); }
-  }
-};
-async function loadPolyHaven(id) {      // модели Poly Haven (CC0): glTF + отдельные текстуры
-  const files = await getJSON('https://api.polyhaven.com/files/' + encodeURIComponent(id));
-  const g = files.gltf && (files.gltf['1k'] || files.gltf['2k'] || Object.values(files.gltf)[0]);
-  if (!g || !g.gltf) throw new Error('у этой модели нет glTF');
-  const inc = Object.entries(g.gltf.include || {});
-  const manager = new THREE.LoadingManager();
-  manager.setURLModifier((u) => {
-    let d = u;
-    try { d = decodeURIComponent(u); } catch { /* как есть */ }
-    for (const [k, v] of inc) if (d.endsWith('/' + k) || d === k) return v.url;
-    return u;
-  });
-  return (await new GLTFLoader(manager).loadAsync(g.gltf.url)).scene;
-}
-
-async function loadTemplate(src) {
-  let url = src, name = src, revoke = null;
-  if (src.startsWith('idb:')) {
-    const rec = await idbGet(src.slice(4));
-    if (!rec) throw new Error('файл не найден в памяти этого браузера');
-    url = revoke = URL.createObjectURL(rec.blob);
-    name = rec.name;
-  }
-  try {
-    const ext = extOf(name);
-    let object;
-    if (src.startsWith('ph:')) object = await loadPolyHaven(src.slice(3));
-    else if (ext === 'obj') {
-      const { OBJLoader } = await import('three/addons/loaders/OBJLoader.js');
-      object = await new OBJLoader().loadAsync(url);
-    } else if (ext === 'stl') {
-      const { STLLoader } = await import('three/addons/loaders/STLLoader.js');
-      const geo = await new STLLoader().loadAsync(url);
-      const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: '#cfcac0', roughness: 0.8 }));
-      mesh.rotation.x = -Math.PI / 2;
-      object = new THREE.Group().add(mesh);
-    } else if (ext === 'fbx') {
-      const { FBXLoader } = await import('three/addons/loaders/FBXLoader.js');
-      object = await new FBXLoader().loadAsync(url);
-    } else {
-      object = (await getGLTFLoader().loadAsync(url)).scene;
-    }
-    object.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-    object.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(object);
-    if (box.isEmpty()) throw new Error('в файле нет геометрии');
-    const size = box.getSize(new THREE.Vector3()).max(new THREE.Vector3(1e-4, 1e-4, 1e-4));
-    const c = box.getCenter(new THREE.Vector3());
-    // угадываем единицы: метры → как есть, сантиметры/миллиметры → приводим к метрам
-    const m = Math.max(size.x, size.y, size.z);
-    let k = 1;
-    if (m > 8) { k = 0.01; if (m * k > 8) k = 0.001; if (m * k > 8) k = 2 / m; }
-    else if (m < 0.03) k = 0.5 / m;
-    return { scene: object, size, offset: new THREE.Vector3(-c.x, -box.min.y, -c.z), fit: size.clone().multiplyScalar(k) };
-  } finally {
-    if (revoke) URL.revokeObjectURL(revoke);
-  }
-}
-
-function fillModel(it, g) {
-  const tpl = modelCache.get(it.src);
-  if (tpl && tpl.scene) {
-    const inner = tpl.scene.clone(true);
-    inner.position.add(tpl.offset);
-    const wrap = new THREE.Group().add(inner);
-    wrap.scale.set(it.w / tpl.size.x, it.h / tpl.size.y, it.d / tpl.size.z);
-    g.add(wrap);
-    g.userData.shared = true;           // геометрия общая с шаблоном — не освобождаем
-    return;
-  }
-  const ph = new THREE.Mesh(new THREE.BoxGeometry(it.w, it.h, it.d),
-    new THREE.MeshStandardMaterial({ color: tpl?.error ? '#d98a7a' : '#9fb6d9', transparent: true, opacity: 0.45 }));
-  ph.position.y = it.h / 2;
-  const e = new THREE.LineSegments(new THREE.EdgesGeometry(ph.geometry), EDGE);
-  e.raycast = () => {};
-  ph.add(e);
-  g.add(ph);
-  if (tpl) return;
-  const src = it.src;
-  modelCache.set(src, { promise: true });
-  loadTemplate(src).then((t) => modelCache.set(src, t), (err) => {
-    console.error(err);
-    modelCache.set(src, { error: true });
-    toast(`Не удалось загрузить «${it.name}»: ${err?.message || 'ошибка сети или CORS'}`, 6000);
-  }).then(() => {
-    const t = modelCache.get(src);
-    for (const o of state.items) {
-      if (o.type !== 'model' || o.src !== src) continue;
-      if (o.fit && t.scene) { o.w = r3(t.fit.x); o.h = r3(t.fit.y); o.d = r3(t.fit.z); delete o.fit; }
-      const og = objs.get(o.id);
-      if (og) fillItem(o, og);
-    }
-    silentSave(); updateGizmo(); updateProps(); updateStatus();
-  });
-}
-
 function fillItem(it, g) {
   disposeChildren(g);
-  if (it.type === 'model') fillModel(it, g);
-  else fillBlank(g, it.type, it.w, it.d, it.h, it.color, it.open);
+  fillBlank(g, it.type, it.w, it.d, it.h, it.color, it.open);
 }
 function placeItem(it) {
   const g = objs.get(it.id);
@@ -366,7 +238,7 @@ function snapPos(it, x, z) {
   return [r3(nx), r3(nz)];
 }
 // ── «гравитация»: на что встанет предмет в точке (x, z) ──
-const NOSUP = new Set(['wall', 'door', 'window', 'human', 'plant', 'lamp', 'tv']);
+const NOSUP = new Set(['wall', 'door', 'window', 'human', 'plant', 'lamp', 'tv', 'picture']);
 const downRay = new THREE.Raycaster();
 function restY(it, x, z) {
   if (it.type === 'rug') return 0;
@@ -546,29 +418,9 @@ function addBlank(def) {
   return addItemData({ id: uid(), type: def.type, name: def.name, w: def.w, d: def.d, h: def.h,
     x: 0, z: 0, y: def.y || 0, rot: 0, color: def.color });
 }
-function addModel(src, name) {
-  return addItemData({ id: uid(), type: 'model', src, name, w: 0.6, d: 0.6, h: 0.6, fit: true, keep: true,
-    x: 0, z: 0, y: 0, rot: 0 });
-}
-function normalizeUrl(u) {
-  u = u.trim();
-  const m = u.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/(?:blob|raw)\/(.+)$/i);
-  return m ? `https://raw.githubusercontent.com/${m[1]}/${m[2]}/${m[3]}` : u;
-}
-function addModelFromUrl(raw) {
-  const url = normalizeUrl(raw);
-  if (!/^https?:\/\//i.test(url)) { toast('Нужна ссылка, начинающаяся с https://'); return; }
-  const base = decodeURIComponent(url.split(/[?#]/)[0].split('/').pop() || 'Модель').replace(/\.[a-z0-9]+$/i, '');
-  addModel(url, base || 'Модель');
-}
-async function addModelFromFile(file) {
-  if (!['glb', 'gltf', 'obj', 'stl', 'fbx'].includes(extOf(file.name))) { toast('Поддерживаются GLB, glTF, OBJ, STL, FBX'); return; }
-  const key = uid() + uid();
-  try { await idbPut(key, { blob: file, name: file.name }); }
-  catch { toast('Браузер не дал сохранить файл — модель пропадёт после перезагрузки'); }
-  addModel('idb:' + key, file.name.replace(/\.[a-z0-9]+$/i, ''));
-}
 function removeItem(id) {
+  for (const m of state.dims) for (const k of ['a', 'b'])   // размеры, привязанные к предмету, остаются на месте
+    if (m[k + 'i']?.id === id) { m[k] = dimEnd(m, k).toArray().map(r3); delete m[k + 'i']; }
   const g = objs.get(id);
   if (g) { disposeChildren(g); itemsG.remove(g); objs.delete(id); }
   state.items = state.items.filter((i) => i.id !== id);
@@ -588,34 +440,7 @@ function rotateSel(a) {
   const it = sel();
   if (!it || it.lock) return;
   it.rot = snapRot(it.rot + a);
-  placeItem(it); updateGizmo(); updateProps(); commit();
-}
-
-// ───────────────────────── IndexedDB для файлов с устройства ─────────────────────────
-function idbOpen() {
-  return new Promise((res, rej) => {
-    const r = indexedDB.open('taburetka', 1);
-    r.onupgradeneeded = () => r.result.createObjectStore('files');
-    r.onsuccess = () => res(r.result);
-    r.onerror = () => rej(r.error);
-  });
-}
-async function idbPut(key, val) {
-  const db = await idbOpen();
-  return new Promise((res, rej) => {
-    const tx = db.transaction('files', 'readwrite');
-    tx.objectStore('files').put(val, key);
-    tx.oncomplete = () => res();
-    tx.onerror = () => rej(tx.error);
-  });
-}
-async function idbGet(key) {
-  const db = await idbOpen();
-  return new Promise((res, rej) => {
-    const rq = db.transaction('files').objectStore('files').get(key);
-    rq.onsuccess = () => res(rq.result);
-    rq.onerror = () => rej(rq.error);
-  });
+  placeItem(it); updateGizmo(); updateProps(); refreshDims(it.id); commit();
 }
 
 // ───────────────────────── камеры и вид ─────────────────────────
@@ -829,9 +654,65 @@ function dimObjects(group, a, b) {
 function clearGroup(g) {
   for (const c of [...g.children]) { g.remove(c); c.geometry?.dispose(); if (c.material !== DIM) { c.material?.map?.dispose(); c.material?.dispose(); } }
 }
+// Конец размера может быть привязан к предмету: at = { id, l } — точка в долях его габарита.
+function attachOf(p, id) {
+  const it = id && item(id);
+  if (!it) return undefined;
+  const c = Math.cos(it.rot), s = Math.sin(it.rot), dx = p.x - it.x, dz = p.z - it.z, r4 = (v) => Math.round(v * 1e4) / 1e4;
+  return { id, l: [r4((c * dx - s * dz) / it.w), r4((p.y - it.y) / it.h), r4((s * dx + c * dz) / it.d)] };
+}
+function dimEnd(m, k) {
+  const at = m[k + 'i'], it = at && item(at.id);
+  if (!it) return new THREE.Vector3(...m[k]);
+  const c = Math.cos(it.rot), s = Math.sin(it.rot), lx = at.l[0] * it.w, lz = at.l[2] * it.d;
+  return new THREE.Vector3(it.x + c * lx + s * lz, it.y + at.l[1] * it.h, it.z - s * lx + c * lz);
+}
 function rebuildDims() {
   clearGroup(dimsG);
-  for (const m of state.dims) dimObjects(dimsG, new THREE.Vector3(...m.a), new THREE.Vector3(...m.b));
+  for (const m of state.dims) dimObjects(dimsG, dimEnd(m, 'a'), dimEnd(m, 'b'));
+}
+function refreshDims(id) {
+  if (state.dims.some((m) => m.ai?.id === id || m.bi?.id === id)) rebuildDims();
+}
+// Ластик: что под лучом — предмет или размер
+const eraseBox = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1),
+  new THREE.MeshBasicMaterial({ color: 0xd11919, transparent: true, opacity: 0.38, depthTest: false }));
+eraseBox.add(new THREE.LineSegments(new THREE.EdgesGeometry(eraseBox.geometry),
+  new THREE.LineBasicMaterial({ color: 0xd11919, depthTest: false, transparent: true })));
+eraseBox.renderOrder = 30;
+eraseBox.visible = false;
+eraseBox.raycast = () => {};
+world.add(eraseBox);
+function eraseTarget() {
+  const pk = pickItem();
+  if (pk) return { id: pk.id };
+  world.updateMatrixWorld(true);
+  let best = null, bd = coarse ? 30 : 16;
+  state.dims.forEach((m, i) => {
+    const a = dimEnd(m, 'a'), b = dimEnd(m, 'b');
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) { const d = pxDist(a.clone().lerp(b, t)); if (d < bd) { bd = d; best = { dim: i, a, b }; } }
+  });
+  return best;
+}
+function showErase(t) {
+  const it = t && t.id ? item(t.id) : null;
+  eraseBox.visible = !!t && (!!it || t.dim !== undefined);
+  if (it) {
+    eraseBox.position.set(it.x, it.y + it.h / 2, it.z);
+    eraseBox.rotation.set(0, it.rot, 0);
+    eraseBox.scale.set(it.w + 0.02, it.h + 0.02, it.d + 0.02);
+  } else if (t && t.dim !== undefined) {
+    const d = t.b.clone().sub(t.a), len = Math.max(0.02, d.length());
+    eraseBox.position.copy(t.a).add(t.b).multiplyScalar(0.5);
+    eraseBox.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), d.normalize());
+    eraseBox.scale.set(len, 0.03, 0.03);
+  }
+}
+function doErase(t) {
+  if (!t) return;
+  if (t.id) removeItem(t.id);
+  else { state.dims.splice(t.dim, 1); rebuildDims(); commit(); }
+  showErase(null);
 }
 // Привязка рулетки: сначала углы габаритов мебели и комнаты, затем вершины модели под курсором,
 // иначе — точка на поверхности или на полу (по сетке).
@@ -892,6 +773,7 @@ function itemPoints(it) {                // углы габарита + наст
         pts.push(world.worldToLocal(new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld)));
     });
   }
+  for (const q of pts) q.itemId = it.id;
   ptCache.set(it.id, { key, pts });
   return pts;
 }
@@ -902,20 +784,11 @@ function measurePoint() {
   for (const it of state.items) corners.push(...itemPoints(it));
   for (const x of [-R.w / 2, R.w / 2]) for (const z of [-R.d / 2, R.d / 2])
     corners.push(new THREE.Vector3(x, 0, z), new THREE.Vector3(x, R.h, z));
-  for (const m of state.dims) corners.push(new THREE.Vector3(...m.a), new THREE.Vector3(...m.b));
+  for (const m of state.dims) corners.push(dimEnd(m, 'a'), dimEnd(m, 'b'));
   const c = nearest(corners, lim);
-  if (c) return { p: c.clone(), kind: 'corner' };
+  if (c) return { p: c.clone(), kind: 'corner', id: c.itemId };
   const pk = pickItem();
-  if (pk) {
-    const f = pk.hit.face, pos = pk.hit.object.geometry?.attributes?.position;
-    if (f && pos) {
-      const vs = [f.a, f.b, f.c].map((i) => world.worldToLocal(
-        new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(pk.hit.object.matrixWorld)));
-      const v = nearest(vs, lim);
-      if (v) return { p: v, kind: 'vertex' };
-    }
-    return { p: world.worldToLocal(pk.point), kind: 'free' };
-  }
+  if (pk) return { p: world.worldToLocal(pk.point), kind: 'free', id: pk.id };
   const p = hitPlaneY(localRay(ray.ray), 0);
   if (!p) return null;
   if (state.snap > 0) { p.x = Math.round(p.x / state.snap) * state.snap; p.z = Math.round(p.z / state.snap) * state.snap; }
@@ -939,7 +812,7 @@ function onDown(e) {
   down = null;
   if (e.button !== 0) return;
   down = { pid: e.pointerId, x: e.clientX, y: e.clientY, multi: false, moved: false, noTap: false };
-  if (tool === 'measure' || tool === 'act') return;
+  if (tool === 'measure' || tool === 'act' || tool === 'erase') return;
   setRay(e);
   const d = beginDrag(localRay(ray.ray), e.pointerType === 'mouse');
   if (d) { if (d.mode !== 'move') down.noTap = true; startDrag(d, e); }
@@ -1009,16 +882,20 @@ function updateDrag(d, lr) {
     updateGizmo();
   }
   d.changed = true;
+  refreshDims(d.id);
   return true;
 }
 function measureTap() {
   const m = measurePoint();
   if (!m) return;
-  const p = m.p.clone();
   showSnap(m);
-  if (!measureA) measureA = p;
+  const end = { p: m.p.clone(), at: attachOf(m.p, m.id) };
+  if (!measureA) measureA = end;
   else {
-    state.dims.push({ a: measureA.toArray().map(r3), b: p.toArray().map(r3) });
+    const dim = { a: measureA.p.toArray().map(r3), b: end.p.toArray().map(r3) };
+    if (measureA.at) dim.ai = measureA.at;
+    if (end.at) dim.bi = end.at;
+    state.dims.push(dim);
     measureA = null;
     clearGroup(tmpG);
     rebuildDims();
@@ -1065,12 +942,13 @@ function onMove(e) {
     if (updateDrag(drag, localRay(ray.ray))) updateStatus();
     return;
   }
+  if (tool === 'erase' && e.pointerType === 'mouse' && !(down && down.moved)) { setRay(e); showErase(eraseTarget()); }
   if (tool === 'measure' && e.pointerType === 'mouse' && !(down && down.moved)) {
     setRay(e);
     const m = measurePoint(), was = snapKind;
     showSnap(m);
     clearGroup(tmpG);
-    if (m && measureA) dimObjects(tmpG, measureA, m.p);
+    if (m && measureA) dimObjects(tmpG, measureA.p, m.p);
     if (was !== snapKind) updateStatus();
   }
 }
@@ -1092,6 +970,7 @@ function onUp(e) {
 function onTap(e) {
   setRay(e);
   if (tool === 'measure') { measureTap(); return; }
+  if (tool === 'erase') { doErase(eraseTarget()); return; }
   const pk = pickItem();
   if (tool === 'act') {
     if (!pk) return;
@@ -1131,6 +1010,7 @@ canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 // ───────────────────────── интерфейс ─────────────────────────
 const HINTS = {
   select: 'Тащите предмет: он встаёт на пол или на другую мебель, у стены — поднимается по ней',
+  erase: 'Ластик: наведите на предмет или размер — он станет красным — и нажмите, чтобы удалить',
   act: 'Нажимайте на дверцы и ящики — они открываются и закрываются',
   move3d: 'Тащите стрелку: красная и зелёная — вдоль пола, синяя — вверх-вниз',
   rotate: 'Выберите предмет и тащите вокруг него — поворот с шагом 15°',
@@ -1140,7 +1020,7 @@ const HINTS = {
 function updateStatus() {
   const it = sel();
   let s = HINTS[tool];
-  if (tool === 'act') s = HINTS.act;
+  if (tool === 'act' || tool === 'erase') s = HINTS[tool];
   else if (tool === 'measure') s = (measureA ? 'Рулетка: укажите вторую точку' : HINTS.measure) + (snapKind ? ` · привязка: ${snapKind}` : '');
   else if (it) s = `${it.name} — ${fmt(it.w)} × ${fmt(it.d)} × ${fmt(it.h)}`.replace(/ см(?= ×)/g, '');
   $('#status').textContent = s;
@@ -1150,6 +1030,7 @@ function setTool(t) {
   measureA = null;
   clearGroup(tmpG);
   showSnap(null);
+  showErase(null);
   vm.dirty = true;
   for (const b of $$('#tools [data-tool]')) b.classList.toggle('on', b.dataset.tool === t);
   updateGizmo(); updateStatus();
@@ -1183,7 +1064,7 @@ function editSel(fn, rebuild = true) {
   if (!it) return;
   fn(it);
   if (rebuild) fillItem(it, objs.get(it.id));
-  placeItem(it); updateGizmo(); updateProps(); updateStatus(); commit();
+  placeItem(it); updateGizmo(); updateProps(); updateStatus(); refreshDims(it.id); commit();
 }
 function bindSize(input, key) {
   input.addEventListener('change', () => editSel((it) => {
@@ -1217,14 +1098,6 @@ const catalogEl = $('#catalog');
 function toggleCatalog(show = catalogEl.hidden) { catalogEl.hidden = !show; }
 $('#btnAdd').onclick = () => toggleCatalog();
 $('#catClose').onclick = () => toggleCatalog(false);
-for (const b of $$('#catalog [data-tab]')) b.onclick = () => {
-  for (const o of $$('#catalog [data-tab]')) o.classList.toggle('on', o === b);
-  $('#tabBlanks').hidden = b.dataset.tab !== 'blanks';
-  $('#tabWeb').hidden = b.dataset.tab !== 'web';
-  if (b.dataset.tab === 'web') openPolyHaven();
-};
-$('#phSearch').addEventListener('input', (e) => { ph.q = e.target.value; ph.shown = 48; renderPolyHaven(); });
-$('#phMore').onclick = () => { ph.shown += 48; renderPolyHaven(); };
 function afterAdd() { if (innerWidth <= 640 || renderer.xr.isPresenting) toggleCatalog(false); }
 let blankThumbs = {};
 function buildCatalog() {
@@ -1241,70 +1114,6 @@ function buildCatalog() {
     b.onclick = () => { addBlank(def); afterAdd(); };
     grid.append(b);
   }
-  const sg = $('#samples');
-  for (const sm of SAMPLES) sg.append(tile(sm.name, '', sm.shot, () => { addModel(sm.url, sm.name); afterAdd(); }));
-}
-function tile(name, sub, img, onclick) {
-  const b = document.createElement('button');
-  if (img) {
-    const im = new Image();
-    im.loading = 'lazy'; im.alt = ''; im.src = img;
-    im.onerror = () => im.remove();
-    b.append(im);
-  }
-  const n = document.createElement('span');
-  n.textContent = name;
-  b.append(n);
-  if (sub) { const sm = document.createElement('small'); sm.textContent = sub; b.append(sm); }
-  b.onclick = onclick;
-  return b;
-}
-// Живой каталог Poly Haven: список и картинки подгружаются при открытии вкладки
-const PH_CATS = [['Мебель', ['furniture']], ['Сиденья', ['seating']], ['Столы', ['table']], ['Полки', ['shelves']],
-  ['Свет', ['lighting']], ['Техника', ['appliances', 'electronics']],
-  ['Декор', ['decorative', 'vases', 'wall decoration', 'books', 'dishes']],
-  ['Растения', ['potted plants', 'flowers']], ['Всё', null]];
-const ph = { list: null, loading: false, cat: 0, q: '', shown: 48 };
-async function openPolyHaven() {
-  if (ph.list || ph.loading) return;
-  ph.loading = true;
-  $('#phGrid').textContent = 'Загружаю каталог…';
-  try {
-    const data = await getJSON('https://api.polyhaven.com/assets?t=models');
-    ph.list = Object.entries(data).map(([id, a]) => ({ id, name: a.name || id, cats: a.categories || [],
-      text: `${a.name} ${(a.tags || []).join(' ')} ${(a.categories || []).join(' ')}`.toLowerCase(),
-      dim: Array.isArray(a.dimensions) ? a.dimensions : null, pop: a.download_count || 0 }))
-      .sort((x, y) => y.pop - x.pop);
-    const chips = $('#phCats');
-    PH_CATS.forEach(([label], i) => {
-      const c = document.createElement('button');
-      c.textContent = label;
-      c.onclick = () => { ph.cat = i; ph.shown = 48; renderPolyHaven(); };
-      chips.append(c);
-    });
-    renderPolyHaven();
-  } catch (e) {
-    console.error(e);
-    $('#phGrid').textContent = 'Каталог не загрузился — проверьте сеть и откройте вкладку ещё раз.';
-  }
-  ph.loading = false;
-}
-function renderPolyHaven() {
-  vm.dirty = true;
-  if (!ph.list) return;
-  [...$('#phCats').children].forEach((c, i) => c.classList.toggle('on', i === ph.cat));
-  const cats = PH_CATS[ph.cat][1], q = ph.q.trim().toLowerCase();
-  const res = ph.list.filter((m) => (q ? m.text.includes(q) : !cats || m.cats.some((c) => cats.includes(c))));
-  const grid = $('#phGrid');
-  grid.textContent = '';
-  for (const m of res.slice(0, ph.shown)) {
-    const dim = m.dim ? m.dim.map((v) => Math.round(v / 10)) : null;      // мм → см
-    grid.append(tile(m.name, dim ? `${dim[0]}×${dim[1]}×${dim[2]}` : '',
-      `https://cdn.polyhaven.com/asset_img/thumbs/${encodeURIComponent(m.id)}.png?width=200&height=150`,
-      () => { addModel('ph:' + m.id, m.name); afterAdd(); }));
-  }
-  if (!res.length) grid.textContent = 'Ничего не нашлось';
-  $('#phMore').hidden = res.length <= ph.shown;
 }
 function makeThumbs() {
   const out = {};
@@ -1333,17 +1142,11 @@ function makeThumbs() {
   } catch (e) { console.warn('thumbs', e); }
   return out;
 }
-$('#mLoad').onclick = () => { const v = $('#mUrl').value; if (v.trim()) { addModelFromUrl(v); $('#mUrl').value = ''; afterAdd(); } };
-$('#mUrl').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#mLoad').click(); });
-$('#mFile').onclick = () => $('#fileModel').click();
-$('#fileModel').onchange = async (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) { await addModelFromFile(f); afterAdd(); } };
 addEventListener('dragover', (e) => e.preventDefault());
 addEventListener('drop', (e) => {
   e.preventDefault();
   const f = e.dataTransfer?.files?.[0];
-  if (f) { if (extOf(f.name) === 'json') openProjectFile(f); else addModelFromFile(f); return; }
-  const u = e.dataTransfer?.getData('text/uri-list') || e.dataTransfer?.getData('text/plain');
-  if (u && /^https?:/i.test(u)) addModelFromUrl(u);
+  if (f && /\.json$/i.test(f.name)) openProjectFile(f);
 });
 
 // меню
@@ -1386,7 +1189,6 @@ const MENU = {
     const url = location.origin + location.pathname + '#p=' + b64e(cur);
     try { await navigator.clipboard.writeText(url); toast('Ссылка скопирована'); }
     catch { prompt('Ссылка на проект:', url); }
-    if (state.items.some((i) => i.src?.startsWith('idb:'))) toast('Модели из файлов с устройства по ссылке не откроются — у них нет адреса в сети', 6000);
   },
   glb: exportGLB,
   cleardims() { state.dims = []; measureA = null; clearGroup(tmpG); rebuildDims(); commit(); },
@@ -1414,6 +1216,7 @@ addEventListener('keydown', (e) => {
   if (k === 'v' || k === 'м') setTool('select');
   else if (k === 'm' || k === 'ь') setTool('move3d');
   else if (k === 'i' || k === 'ш') setTool('act');
+  else if (k === 'x' || k === 'ч') setTool('erase');
   else if (k === 'r' || k === 'к') setTool('rotate');
   else if (k === 'p' || k === 'з') setTool('pull');
   else if (k === 't' || k === 'е') setTool('measure');
@@ -1428,7 +1231,7 @@ addEventListener('keydown', (e) => {
     if (k === 'arrowleft') it.x -= s; if (k === 'arrowright') it.x += s;
     if (k === 'arrowup') it.z -= s; if (k === 'arrowdown') it.z += s;
     it.x = r3(it.x); it.z = r3(it.z);
-    placeItem(it); updateGizmo(); commit();
+    placeItem(it); updateGizmo(); refreshDims(it.id); commit();
   }
 });
 
@@ -1453,6 +1256,7 @@ const TOOLS = [
   ['rotate', 'Поворот', 'M20 12a8 8 0 1 1-3-6.2M20 3v5h-5'],
   ['pull', 'Тянуть', 'M4 14h10v6H4zM9 14V4M5 8l4-4 4 4'],
   ['measure', 'Рулетка', 'M3 16L16 3l5 5L8 21zM7 12l2 2M10 9l2 2M13 6l2 2'],
+  ['erase', 'Ластик', 'M8 21h12M5.6 14.4l8-8a2 2 0 0 1 2.8 0l3.2 3.2a2 2 0 0 1 0 2.8L12 20H8.5l-2.9-2.8a2 2 0 0 1 0-2.8zM10 10l6 6'],
   ['act', 'Действие', 'M9 12V5a1.5 1.5 0 0 1 3 0v5.5m0-1a1.5 1.5 0 0 1 3 0V11m0-.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-1a6 6 0 0 1-5-2.6L4.6 15a1.5 1.5 0 0 1 2.5-1.7L9 15.5'],
 ];
 const VW = 720, VH = 1110, FONT = '"Oswald", "PT Sans", system-ui, sans-serif';
@@ -1531,47 +1335,21 @@ function vmDraw() {
   btn(530, 16, 110, 56, 'mini', 'Макет', { on: xr.mini });
   btn(648, 16, 56, 56, 'exit', '✕', { fg: RED });
 
-  // каталог
+  // каталог болванок
   card(1, 102, VW - 2, 846, '#EBDFC3');
-  btn(20, 118, 176, 54, 'tab:blanks', 'Болванки', { on: vm.tab === 'blanks', r: 12 });
-  btn(196, 118, 236, 54, 'tab:web', 'Модели из сети', { on: vm.tab === 'web', r: 12 });
-  let list = [], y0 = 190;
-  if (vm.tab === 'blanks') {
-    list = CATALOG.map((d) => ({ act: 'add:' + d.type, name: d.name, sub: `${cm(d.w)}×${cm(d.d)}×${cm(d.h)}`, img: blankThumbs[d.type] }));
-  } else {
-    let cx = 20, cy = 190;
-    x.font = `500 19px ${FONT}`;
-    PH_CATS.forEach(([label], i) => {
-      const w = Math.ceil(x.measureText(label).width) + 30;
-      if (cx + w > VW - 20) { cx = 20; cy += 50; }
-      btn(cx, cy, w, 42, 'cat:' + i, label, { on: ph.cat === i, r: 21, font: 19 });
-      cx += w + 8;
-    });
-    y0 = cy + 56;
-    if (ph.list) {
-      const cats = PH_CATS[ph.cat][1];
-      list = ph.list.filter((m) => !cats || m.cats.some((c) => cats.includes(c))).map((m) => ({
-        act: 'ph:' + m.id, name: m.name, sub: m.dim ? m.dim.map((v) => Math.round(v / 10)).join('×') : '',
-        img: `https://cdn.polyhaven.com/asset_img/thumbs/${encodeURIComponent(m.id)}.png?width=200&height=150` }));
-    } else {
-      x.fillStyle = '#5a5147'; x.font = 'italic 22px "PT Serif", Georgia, serif'; x.textAlign = 'center';
-      x.fillText('Загружаю каталог…', VW / 2, y0 + 80);
-    }
-  }
-  const per = 9, pages = Math.max(1, Math.ceil(list.length / per));
+  const list = CATALOG.map((d) => ({ act: 'add:' + d.type, name: d.name, sub: `${cm(d.w)}×${cm(d.d)}×${cm(d.h)}`, img: blankThumbs[d.type] }));
+  const per = 12, pages = Math.max(1, Math.ceil(list.length / per));
   vm.page = clamp(vm.page, 0, pages - 1);
-  vm.names = {};
   list.slice(vm.page * per, vm.page * per + per).forEach((t, i) => {
-    const tx = 20 + (i % 3) * 230, ty = y0 + Math.floor(i / 3) * 200;
-    btn(tx, ty, 220, 190, t.act, '', {});
-    vm.names[t.act] = t.name;
+    const tx = 20 + (i % 3) * 230, ty = 118 + Math.floor(i / 3) * 190;
+    btn(tx, ty, 220, 180, t.act, '', {});
     const im = vmImg(t.img);
-    if (im) x.drawImage(im, tx + 35, ty + 8, 150, 112);
+    if (im) x.drawImage(im, tx + 39, ty + 6, 142, 106);
     x.textAlign = 'center';
     x.fillStyle = INK; x.font = `500 19px ${FONT}`;
-    x.fillText(fit(t.name.toUpperCase(), 204), tx + 110, ty + 140);
+    x.fillText(fit(t.name.toUpperCase(), 204), tx + 110, ty + 132);
     x.fillStyle = '#5a5147'; x.font = '15px "PT Mono", ui-monospace, monospace';
-    x.fillText(t.sub, tx + 110, ty + 166);
+    x.fillText(t.sub, tx + 110, ty + 158);
   });
   btn(20, 884, 96, 50, 'page:-1', '◀', { off: vm.page <= 0 });
   btn(VW - 116, 884, 96, 50, 'page:1', '▶', { off: vm.page >= pages - 1 });
@@ -1580,14 +1358,66 @@ function vmDraw() {
 
   // инструменты
   card(1, 962, VW - 2, 146, '#EBDFC3');
-  TOOLS.forEach(([id, label, path], i) => {
-    const bx = 14 + i * 116, on = tool === id;
-    btn(bx, 974, 110, 122, 'tool:' + id, '', { on });
-    icon(path, bx + 55 - 26, 986, 2.2, on ? CREAM : INK);
-    x.fillStyle = on ? CREAM : INK; x.font = `600 16px ${FONT}`; x.textAlign = 'center';
-    x.fillText(label.toUpperCase(), bx + 55, 1070);
-  });
+  TOOLS.forEach(([id, label, path], i) => drawTool(x, btn, icon, id, label, path, 12 + i * 100, 974, 94, 122));
   vm.tex.needsUpdate = true;
+}
+function drawTool(x, btn, icon, id, label, path, bx, by, w, h, hot = tool === id) {
+  if (btn) btn(bx, by, w, h, 'tool:' + id, '', { on: hot });
+  icon(path, bx + w / 2 - 26, by + 12, 2.2, hot ? CREAM : INK);
+  x.fillStyle = hot ? CREAM : INK; x.font = `600 15px ${FONT}`; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.fillText(label.toUpperCase(), bx + w / 2, by + h - 26);
+}
+// Кольцо инструментов: держим B на правом контроллере, наводим луч, отпускаем — инструмент выбран.
+const tw = { mesh: null, ctx: null, tex: null, hover: -1, by: null };
+const TWC = 120, TWH = 150;
+function twDraw() {
+  const x = tw.ctx, n = TOOLS.length;
+  x.clearRect(0, 0, TWC * n, TWH);
+  const icon = (path, ix, iy, sc, color) => {
+    x.save(); x.translate(ix, iy); x.scale(sc, sc);
+    x.strokeStyle = color; x.lineWidth = 1.8; x.lineCap = 'round'; x.lineJoin = 'round';
+    x.stroke(new Path2D(path)); x.restore();
+  };
+  TOOLS.forEach(([id, label, path], i) => {
+    const hot = tw.hover === i;
+    x.fillStyle = hot ? RED : tool === id ? INK : '#F3EAD4';
+    x.fillRect(i * TWC + 3, 3, TWC - 6, TWH - 6);
+    x.strokeStyle = INK; x.lineWidth = 4; x.strokeRect(i * TWC + 3, 3, TWC - 6, TWH - 6);
+    drawTool(x, null, icon, id, label, path, i * TWC + 3, 12, TWC - 6, TWH - 16, hot || tool === id);
+  });
+  tw.tex.needsUpdate = true;
+}
+function twOpen(c) {
+  const n = TOOLS.length;
+  if (!tw.mesh) {
+    const cv = document.createElement('canvas');
+    cv.width = TWC * n; cv.height = TWH;
+    tw.ctx = cv.getContext('2d');
+    tw.tex = new THREE.CanvasTexture(cv);
+    tw.tex.colorSpace = THREE.SRGBColorSpace;
+    tw.mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.075 * n, 0.075 * TWH / TWC),
+      new THREE.MeshBasicMaterial({ map: tw.tex, transparent: true, depthTest: false }));
+    tw.mesh.renderOrder = 50;
+    scene.add(tw.mesh);
+  }
+  const R = ctrlRay(c), idx = Math.max(0, TOOLS.findIndex((t) => t[0] === tool));
+  tw.mesh.position.copy(R.origin).addScaledVector(R.direction, 0.45);
+  tw.mesh.lookAt(R.origin);
+  tw.mesh.translateX(-(idx - (n - 1) / 2) * 0.075);   // текущий инструмент — под лучом
+  tw.mesh.visible = true;
+  tw.by = c; tw.hover = idx;
+  twDraw();
+}
+function twUpdate(c) {
+  xray.ray.copy(ctrlRay(c));
+  const h = xray.intersectObject(tw.mesh, false)[0];
+  const i = h && h.uv ? clamp(Math.floor(h.uv.x * TOOLS.length), 0, TOOLS.length - 1) : -1;
+  if (i !== tw.hover) { tw.hover = i; twDraw(); }
+}
+function twClose() {
+  if (tw.hover >= 0) setTool(TOOLS[tw.hover][0]);
+  tw.mesh.visible = false;
+  tw.by = null;
 }
 function vmHit(R) {
   const m = vm.mesh;
@@ -1602,11 +1432,8 @@ function vmHit(R) {
 function vmAction(act) {
   if (!act) return;
   const [k, v] = act.split(/:(.*)/);
-  if (k === 'tab') { vm.tab = v; vm.page = 0; if (v === 'web') openPolyHaven(); }
-  else if (k === 'cat') { ph.cat = +v; vm.page = 0; renderPolyHaven(); }
-  else if (k === 'page') vm.page += +v;
+  if (k === 'page') vm.page += +v;
   else if (k === 'add') addBlank(CATALOG.find((d) => d.type === v));
-  else if (k === 'ph') addModel(act, vm.names?.[act] || v);
   else if (k === 'tool') setTool(v);
   else if (k === 'undo') undo();
   else if (k === 'redo') redo();
@@ -1677,8 +1504,10 @@ function xrSelectStart(c, R) {
   if (!c.visible) return;
   const reg = vmHit(R);
   if (reg) { vmAction(reg.act); return; }
+  if (tw.by) return;
   ray.ray.copy(R);
   if (tool === 'measure') { measureTap(); return; }
+  if (tool === 'erase') { doErase(eraseTarget()); return; }
   if (tool === 'act') { const pk = pickItem(); if (pk) tapPart(pk); return; }
   const d = beginDrag(localRay(R), false);
   if (d) { d.t0 = performance.now(); c.userData.grab = d; return; }
@@ -1764,27 +1593,20 @@ function sticks(dt) {
     }
     if (!gp || src.targetRayMode !== 'tracked-pointer') continue;
     const hand = src.handedness, edge = (i) => { const p = !!gp.buttons[i]?.pressed, was = !!u.btn[i]; u.btn[i] = p; return p && !was; };
-    const a = edge(4), b = edge(5);
-    if (hand === 'right') {
-      if (a) setTool(tool === 'pull' ? 'select' : 'pull');
-      if (b) setTool(tool === 'measure' ? 'select' : 'measure');
+    if (hand === 'right') {             // B: держать — кольцо инструментов
+      const held = !!gp.buttons[5]?.pressed;
+      if (held && !tw.by && !u.grab) twOpen(c);
+      else if (held && tw.by === c) twUpdate(c);
+      else if (!held && tw.by === c) twClose();
     } else if (hand === 'left') {
-      if (a) undo();
-      if (b && vm.mesh) vm.mesh.visible = !vm.mesh.visible;
+      if (edge(4)) undo();
+      if (edge(5) && vm.mesh) vm.mesh.visible = !vm.mesh.visible;
     }
     const ax = gp.axes;
     const x = (Math.abs(ax[2] ?? 0) > Math.abs(ax[0] ?? 0) ? ax[2] : ax[0]) || 0;
     const y = (Math.abs(ax[3] ?? 0) > Math.abs(ax[1] ?? 0) ? ax[3] : ax[1]) || 0;
     if (hand === 'right') {
-      const it = sel();
-      if (u.rotId && (!it || it.id !== u.rotId || Math.abs(x) <= 0.35)) {
-        const r = item(u.rotId);
-        u.rotId = null;
-        if (r) { r.rot = snapRot(r.rot); placeItem(r); updateGizmo(); commit(); }
-      }
-      if (it && !it.lock) {
-        if (Math.abs(x) > 0.35) { it.rot -= x * dt * 1.8; u.rotId = it.id; placeItem(it); gizmo.rotation.y = it.rot; }
-      } else if (xr.mode === 'vr') {
+      if (xr.mode === 'vr') {
         if (Math.abs(x) > 0.6) {
           if (!u.turned) {
             u.turned = true;
@@ -1817,7 +1639,13 @@ function xrTick(frame, dt) {
       const reg = vmHit(R);
       u.line.scale.z = reg && reg.dist ? reg.dist : 4;
       if (reg) hover = reg.act || hover;
-      else if (tool === 'measure' && !aimed && u.src.handedness !== 'left') {   // метка привязки под лучом
+      else if (tool === 'erase' && !aimed && !tw.by && u.src.handedness !== 'left') {   // ластик: цель краснеет
+        aimed = true;
+        ray.ray.copy(R);
+        const t = eraseTarget();
+        showErase(t);
+        u.line.material.color.set(t ? 0xd11919 : 0x1f6feb);
+      } else if (tool === 'measure' && !aimed && u.src.handedness !== 'left') {   // метка привязки под лучом
         aimed = true;
         ray.ray.copy(R);
         const m = measurePoint();
@@ -1825,7 +1653,7 @@ function xrTick(frame, dt) {
         if (m && m.p.distanceTo(lastAim) > 0.004) {
           lastAim.copy(m.p);
           clearGroup(tmpG);
-          if (measureA) dimObjects(tmpG, measureA, m.p);
+          if (measureA) dimObjects(tmpG, measureA.p, m.p);
         }
       }
     }
@@ -1950,7 +1778,7 @@ $('#btnAR').onclick = () => startXR('ar');
 $('#btnQL').onclick = quickLook;
 
 // ───────────────────────── запуск ─────────────────────────
-window.__taburetka = { vm, vmBuild, vmDraw };
+window.__taburetka = { vm, vmBuild, vmDraw, tw, twDraw };
 document.fonts?.load('600 20px Oswald').then(() => { vm.dirty = true; });
 document.fonts?.load('20px "PT Mono"').then(() => { vm.dirty = true; rebuildDims(); });
 function boot() {

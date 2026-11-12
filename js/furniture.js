@@ -185,6 +185,60 @@ const BUILD = {
   },
   sofa,
   armchair: sofa,
+  cornersofa(b, w, d, h) {
+    const bh = Math.min(0.28, h * 0.36), dd = Math.min(0.95, d * 0.5), cw = Math.min(0.95, w * 0.42), bk = 0.2;
+    b.box(w, bh, dd, 0, 0, -d / 2 + dd / 2, b.m2);
+    b.box(cw, bh, d - dd, w / 2 - cw / 2, 0, -d / 2 + dd + (d - dd) / 2, b.m2);
+    b.box(w, h - bh, bk, 0, bh, -d / 2 + bk / 2);
+    b.box(0.18, Math.min(0.24, h - bh), dd - bk, -w / 2 + 0.09, bh, -d / 2 + bk + (dd - bk) / 2);
+    b.box(w - 0.2 - cw, 0.12, dd - bk - 0.02, -w / 2 + 0.19 + (w - 0.2 - cw) / 2, bh, -d / 2 + bk + (dd - bk) / 2, b.m3);
+    b.box(cw - 0.02, 0.12, d - bk - 0.02, w / 2 - cw / 2, bh, -d / 2 + bk + (d - bk) / 2, b.m3);
+  },
+  bench(b, w, d, h) {
+    b.box(w, 0.04, d, 0, h - 0.04, 0);
+    for (const s of [-1, 1]) b.box(0.04, h - 0.04, d - 0.04, s * (w / 2 - 0.1), 0, 0, b.m2);
+    b.box(w - 0.24, 0.03, 0.03, 0, h * 0.35, 0, b.m2);
+  },
+  barstool(b, w, d, h) {
+    b.cyl(0.5, 0.5, 0.04, 0, h - 0.04, 0, b.m, w, d);
+    const { lx, lz } = legs(b, w, d, h - 0.04, 0.03, 0.05);
+    for (const s of [-1, 1]) {
+      b.box(2 * lx - 0.03, 0.02, 0.02, 0, h * 0.32, s * lz, b.m2);
+      b.box(0.02, 0.02, 2 * lz - 0.03, s * lx, h * 0.32, 0, b.m2);
+    }
+  },
+  coffeetable(b, w, d, h) {
+    b.box(w, 0.03, d, 0, h - 0.03, 0);
+    legs(b, w, d, h - 0.03, 0.04, 0.02);
+    b.box(w - 0.14, 0.02, d - 0.14, 0, h * 0.3, 0, b.m3);
+  },
+  pouf(b, w, d, h) {
+    b.cyl(0.5, 0.5, h - 0.012, 0, 0, 0, b.m, w, d);
+    b.cyl(0.47, 0.5, 0.012, 0, h - 0.012, 0, b.m3, w, d);
+  },
+  wallshelf(b, w, d, h) {
+    b.box(w, 0.03, d, 0, h - 0.03, 0);
+    for (const s of [-1, 1]) b.box(0.02, h - 0.03, d * 0.7, s * (w / 2 - 0.12), 0, -d * 0.15, b.m2);
+  },
+  picture(b, w, d, h) {
+    b.box(w, h, d, 0, 0, 0, b.m2);
+    b.box(w - 0.08, h - 0.08, 0.006, 0, 0.04, d / 2, b.m3);
+  },
+  washer(b, w, d, h) {
+    b.box(w, h, d - 0.02, 0, 0, -0.01);
+    b.box(w - 0.04, 0.08, 0.012, 0, h - 0.13, d / 2 - 0.014, b.m3);
+    const r = Math.min(w, h) * 0.3;
+    const door = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.03, 32), std('#2b2f36', { roughness: 0.35 }));
+    door.rotation.x = Math.PI / 2;
+    door.scale.set(2 * r, 1, 2 * r);
+    door.position.set(0, h * 0.45, d / 2 - 0.005);
+    b.finish(door);
+  },
+  bathtub(b, w, d, h) {
+    b.box(w, h, d);
+    b.box(w - 0.14, 0.012, d - 0.14, 0, h - 0.006, 0, std('#cfe4ee', { roughness: 0.3 }));
+  },
+  nightstand(b, w, d, h) { BUILD.dresser(b, w, d, h); },
   bed(b, w, d, h) {
     const fh = Math.min(0.3, h * 0.35), mh = Math.min(0.22, h * 0.3), ht = 0.06;
     b.box(w, fh, d - ht, 0, 0, ht / 2, b.m2);
@@ -247,15 +301,25 @@ export const CATALOG = [
   { type: 'chair', name: 'Стул', w: 0.45, d: 0.5, h: 0.9, color: '#c8a27a' },
   { type: 'armchair', name: 'Кресло', w: 0.9, d: 0.85, h: 0.8, color: '#8c9aa8' },
   { type: 'sofa', name: 'Диван', w: 2.1, d: 0.95, h: 0.8, color: '#8c9aa8' },
+  { type: 'cornersofa', name: 'Угловой диван', w: 2.6, d: 1.7, h: 0.8, color: '#8c9aa8' },
+  { type: 'pouf', name: 'Пуф', w: 0.5, d: 0.5, h: 0.42, color: '#b5553c' },
+  { type: 'bench', name: 'Скамья', w: 1.2, d: 0.38, h: 0.45, color: '#c8a27a' },
+  { type: 'barstool', name: 'Барный стул', w: 0.38, d: 0.38, h: 0.75, color: '#c8a27a' },
   { type: 'bed', name: 'Кровать', w: 1.6, d: 2.1, h: 0.9, color: '#b9a48c' },
   { type: 'table', name: 'Стол', w: 1.4, d: 0.8, h: 0.75, color: '#c8a27a' },
+  { type: 'coffeetable', name: 'Журнальный столик', w: 1.0, d: 0.6, h: 0.42, color: '#c8a27a' },
   { type: 'roundtable', name: 'Круглый стол', w: 0.9, d: 0.9, h: 0.75, color: '#c8a27a' },
   { type: 'desk', name: 'Письменный стол', w: 1.2, d: 0.6, h: 0.75, color: '#e9e4da' },
   { type: 'wardrobe', name: 'Шкаф', w: 1.2, d: 0.6, h: 2.1, color: '#e9e4da' },
   { type: 'dresser', name: 'Комод / тумба', w: 0.8, d: 0.45, h: 0.8, color: '#e9e4da' },
+  { type: 'nightstand', name: 'Прикроватная тумба', w: 0.45, d: 0.4, h: 0.5, color: '#e9e4da' },
   { type: 'shelf', name: 'Стеллаж', w: 0.8, d: 0.3, h: 1.8, color: '#c8a27a' },
   { type: 'kitchen', name: 'Кухонный модуль', w: 0.6, d: 0.6, h: 0.86, color: '#e9e4da' },
   { type: 'fridge', name: 'Холодильник', w: 0.6, d: 0.65, h: 1.9, color: '#d5d9dc' },
+  { type: 'washer', name: 'Стиральная машина', w: 0.6, d: 0.55, h: 0.85, color: '#e3e5e6' },
+  { type: 'bathtub', name: 'Ванна', w: 1.7, d: 0.75, h: 0.58, color: '#f1f1ee' },
+  { type: 'wallshelf', name: 'Настенная полка', w: 0.9, d: 0.22, h: 0.2, y: 1.4, color: '#c8a27a' },
+  { type: 'picture', name: 'Картина', w: 0.7, d: 0.03, h: 0.5, y: 1.3, color: '#3a332b' },
   { type: 'tv', name: 'Телевизор', w: 1.2, d: 0.25, h: 0.78, color: '#2b2f36' },
   { type: 'lamp', name: 'Торшер', w: 0.4, d: 0.4, h: 1.6, color: '#d8c9a0' },
   { type: 'plant', name: 'Растение', w: 0.5, d: 0.5, h: 1.1, color: '#5f8f4e' },
