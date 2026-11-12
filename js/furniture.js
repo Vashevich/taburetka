@@ -99,6 +99,14 @@ export function applyAct(part, t) {
   else part.position.z = a.z0 + t * a.travel;
 }
 
+// Пустой корпус из панелей: боковины, дно (высотой bot), крышка и задняя стенка.
+function carcass(b, w, h, D, zc, t, bot) {
+  for (const s of [-1, 1]) b.box(t, h, D, s * (w / 2 - t / 2), 0, zc);
+  b.box(w - 2 * t, bot, D, 0, 0, zc);
+  b.box(w - 2 * t, t, D, 0, h - t, zc);
+  b.box(w - 2 * t, h - t - bot, 0.008, 0, bot, zc - D / 2 + 0.004, b.m2);
+}
+
 function sofa(b, w, d, h) {
   const baseH = Math.max(0.1, Math.min(0.3, h * 0.36));
   const armW = Math.min(0.18, w * 0.16), backD = Math.min(0.22, d * 0.26);
@@ -117,22 +125,31 @@ const BUILD = {
   rug(b, w, d, h) { b.box(w, h, d); },
 
   wardrobe(b, w, d, h) {
-    b.box(w, h, d - 0.02, 0, 0, -0.01);
+    const D = d - 0.02, zc = -0.01, t = 0.018;
+    carcass(b, w, h, D, zc, t, 0.05);
+    if (h > 1.2) {                      // полка сверху и штанга под ней
+      b.box(w - 2 * t, t, D - 0.012, 0, h - 0.36, zc + 0.004);
+      b.box(w - 2 * t, 0.025, 0.025, 0, h - 0.46, zc, b.m2);
+    } else b.box(w - 2 * t, t, D - 0.012, 0, h / 2, zc + 0.004);
     fronts(b, w, h - 0.06, d, Math.max(1, Math.round(w / 0.5)), 1, 0.05, d / 2 - 0.01, 'v');
   },
   dresser(b, w, d, h) {
-    b.box(w, h, d - 0.02, 0, 0, -0.01);
+    carcass(b, w, h, d - 0.02, -0.01, 0.018, 0.05);
     fronts(b, w, h - 0.06, d, w > 1.1 ? 2 : 1, Math.max(1, Math.round((h - 0.06) / 0.22)), 0.05, d / 2 - 0.01, 'h');
   },
   kitchen(b, w, d, h) {
-    const t = 0.04;
-    b.box(w, h - t, d - 0.04, 0, 0, -0.02);
+    const t = 0.04, H = h - t, D = d - 0.04, zc = -0.02;
+    carcass(b, w, H, D, zc, 0.018, 0.1);
+    b.box(w - 0.036, 0.018, D - 0.012, 0, 0.1 + (H - 0.1) / 2, zc + 0.004);
     fronts(b, w, h - t - 0.1, d, Math.max(1, Math.round(w / 0.6)), 1, 0.1, d / 2 - 0.03, 'v');
     b.box(w, t, d, 0, h - t, 0, b.m2);
   },
   fridge(b, w, d, h) {
-    b.box(w, h, d - 0.03, 0, 0, -0.015);
-    const split = h * 0.62;
+    const split = h * 0.62, D = d - 0.03, zc = -0.015, t = 0.03;
+    carcass(b, w, h, D, zc, t, t);
+    b.box(w - 2 * t, t, D - 0.012, 0, split - t / 2, zc + 0.004);
+    for (const y of [split * 0.33, split * 0.66, split + (h - split) / 2])
+      b.box(w - 2 * t, 0.012, D - 0.05, 0, y, zc - 0.01, b.m3);
     const hx = w / 2 - 0.003;          // петли справа, ручки слева
     b.part(hx, 0, d / 2 - 0.015, { kind: 'door', sign: 1 }, () => {
       b.box(w - 0.006, split - 0.012, 0.03, -hx, 0.006, 0, b.m3);

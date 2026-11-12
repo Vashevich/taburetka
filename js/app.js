@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=9';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=10';
 
 const STORE = 'taburetka.project.v1';
 
@@ -613,10 +613,17 @@ function updateConstSize() {
   for (const h of handles) if (h.userData.cs) h.scale.setScalar(h.userData.cs * viewHeightAt(h) * (h === hot ? 1.5 : 1));
   for (const a of arrows) a.scale.setScalar((coarse ? 0.16 : 0.12) * viewHeightAt(a) * (a === hot ? 1.25 : 1));
   if (snapMarker.visible) snapMarker.scale.setScalar((snapMarker.userData.cs || 0.01) * viewHeightAt(snapMarker));
+  // Таблички размеров: на экране — постоянный экранный размер, лицом к камере;
+  // в шлеме — постоянный настоящий размер, строго вертикально, поворачиваются к зрителю только вокруг вертикали.
+  const inXR = renderer.xr.isPresenting, c = inXR ? camera : cam();
+  world.updateMatrixWorld(true);
+  const cl = world.worldToLocal(c.getWorldPosition(new THREE.Vector3()));
   for (const g of [dimsG, tmpG]) for (const o of g.children) {
     if (!o.userData.label) continue;
-    const s = 0.034 * viewHeightAt(o);
+    const s = inXR ? 0.055 : 0.034 * viewHeightAt(o);
     o.scale.set(s * o.userData.aspect, s, 1);
+    if (inXR) o.rotation.set(0, Math.atan2(cl.x - o.position.x, cl.z - o.position.z), 0);
+    else o.quaternion.copy(c.quaternion);
   }
 }
 function pickHandle() {
@@ -633,6 +640,7 @@ function pickHandle() {
 // ───────────────────────── рулетка ─────────────────────────
 const DIM = new THREE.LineBasicMaterial({ color: 0xa61e1e, depthTest: false, transparent: true });
 let measureA = null;
+const LABEL_GEO = new THREE.PlaneGeometry(1, 1);
 function makeLabel(text) {
   const c = document.createElement('canvas'), x = c.getContext('2d'), font = '38px "PT Mono", ui-monospace, monospace';
   x.font = font;
@@ -648,7 +656,7 @@ function makeLabel(text) {
   x.fillText(text, c.width / 2, 34);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+  const sp = new THREE.Mesh(LABEL_GEO, new THREE.MeshBasicMaterial({ map: tex, depthTest: false, transparent: true, side: THREE.DoubleSide }));
   sp.userData = { label: true, aspect: c.width / c.height };
   sp.renderOrder = 20;
   sp.raycast = () => {};
@@ -662,7 +670,11 @@ function dimObjects(group, a, b) {
   group.add(line, lab);
 }
 function clearGroup(g) {
-  for (const c of [...g.children]) { g.remove(c); c.geometry?.dispose(); if (c.material !== DIM) { c.material?.map?.dispose(); c.material?.dispose(); } }
+  for (const c of [...g.children]) {
+    g.remove(c);
+    if (c.geometry !== LABEL_GEO) c.geometry?.dispose();
+    if (c.material !== DIM) { c.material?.map?.dispose(); c.material?.dispose(); }
+  }
 }
 // Конец размера может быть привязан к предмету: at = { id, l } — точка в долях его габарита.
 function attachOf(p, id) {
@@ -1476,7 +1488,7 @@ function twOpen(c) {
   // центр карточки текущего инструмента — под лучом
   const px = TW_PAD + (idx % TW_COLS + 0.5) * TW_CELL - twW() / 2;
   const py = twH() / 2 - (TW_PAD + TW_HEAD + (Math.floor(idx / TW_COLS) + 0.5) * TW_CELL);
-  tw.mesh.position.copy(R.origin).addScaledVector(R.direction, 0.5);
+  tw.mesh.position.copy(R.origin).addScaledVector(R.direction, 0.3);
   tw.mesh.lookAt(R.origin);
   tw.mesh.translateX(-px * TW_M);
   tw.mesh.translateY(-py * TW_M);
@@ -1540,7 +1552,7 @@ function setupControllers() {
     line.visible = false;
     c.userData.line = line;
     c.add(line);
-    const dot = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 10), new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true }));
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 10), new THREE.MeshBasicMaterial({ color: 0x1f6feb, depthTest: false, transparent: true }));
     dot.renderOrder = 60;
     dot.visible = false;
     c.userData.dot = dot;
@@ -1702,20 +1714,30 @@ function sticks(dt) {
     const ax = gp.axes;
     const x = (Math.abs(ax[2] ?? 0) > Math.abs(ax[0] ?? 0) ? ax[2] : ax[0]) || 0;
     const y = (Math.abs(ax[3] ?? 0) > Math.abs(ax[1] ?? 0) ? ax[3] : ax[1]) || 0;
-    if (hand === 'right') {
-      if (xr.env) {                     // плавный поворот себя вокруг своей головы
+    if (hand === 'right') {             // правый стик: вперёд-назад — движение, влево-вправо — плавный поворот
+      const f = camera.getWorldDirection(new THREE.Vector3());
+      f.y = 0; f.normalize();
+      if (xr.env) {
         if (Math.abs(x) > 0.2) {
           const an = -Math.sign(x) * ((Math.abs(x) - 0.2) / 0.8) * 1.6 * dt, h = camera.getWorldPosition(new THREE.Vector3());
           rig.position.sub(h).applyAxisAngle(THREE.Object3D.DEFAULT_UP, an).add(h);
           rig.rotation.y += an;
         }
-      } else if (Math.abs(x) > 0.35) world.rotation.y -= x * dt * 0.5;
-    } else if (hand === 'left' && Math.hypot(x, y) > 0.25) {
-      const f = camera.getWorldDirection(new THREE.Vector3());
-      f.y = 0; f.normalize();
-      const r = new THREE.Vector3(-f.z, 0, f.x);
-      if (xr.env) rig.position.addScaledVector(f, -y * 1.6 * dt).addScaledVector(r, x * 1.6 * dt);
-      else world.position.addScaledVector(f, -y * 0.4 * dt).addScaledVector(r, x * 0.4 * dt);
+        if (Math.abs(y) > 0.2) rig.position.addScaledVector(f, -Math.sign(y) * ((Math.abs(y) - 0.2) / 0.8) * 1.6 * dt);
+      } else {                          // сквозной режим: стик аккуратно двигает и поворачивает саму комнату
+        if (Math.abs(x) > 0.35) world.rotation.y -= x * dt * 0.5;
+        if (Math.abs(y) > 0.35) world.position.addScaledVector(f, -y * 0.4 * dt);
+      }
+    } else if (hand === 'left') {       // левый стик листает меню: ←→ страницы, ↑↓ вкладки
+      const nx = Math.abs(x) > 0.6 && Math.abs(x) >= Math.abs(y) ? Math.sign(x) : 0;
+      const ny = Math.abs(y) > 0.6 && Math.abs(y) > Math.abs(x) ? Math.sign(y) : 0;
+      if (nx && nx !== u.navx) { vm.page += nx; vm.dirty = true; }
+      if (ny && ny !== u.navy) {
+        const n = CATS.length, i = CATS.findIndex((q) => q[0] === vm.cat);
+        vm.cat = CATS[(Math.max(0, i) + ny + n) % n][0];
+        vm.page = 0; vm.dirty = true;
+      }
+      u.navx = nx; u.navy = ny;
     }
   }
 }
@@ -1769,7 +1791,7 @@ function xrTick(frame, dt) {
       u.line.scale.z = on ? dist : 4;
       u.line.material.color.set(lineCol);
       u.dot.visible = on;
-      if (on) { u.dot.position.z = -dist; u.dot.scale.setScalar(0.004 + dist * 0.007); u.dot.material.color.set(lineCol === 0x1f6feb ? 0xffffff : lineCol); }
+      if (on) { u.dot.position.z = -dist; u.dot.scale.setScalar(0.004 + dist * 0.007); u.dot.material.color.set(lineCol); }
     }
     if (u.end) { u.end = false; xrSelectEnd(c); }
   }
