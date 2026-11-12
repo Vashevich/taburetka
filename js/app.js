@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=27';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=28';
 
 const STORE = 'taburetka.project.v1';
 
@@ -552,80 +552,79 @@ function dragMove(it, g, lr) {
   for (const r of g.riders || []) { r.o.x = r3(it.x + r.dx); r.o.y = r3(it.y + r.dy); r.o.z = r3(it.z + r.dz); placeItem(r.o); refreshDims(r.o.id); }
   return true;
 }
-function dragMoveCore(it, g, lr) {
-  const R = state.room, snap = state.snap > 0;
-  if ((g.float || g.hang) && !g.free && snap) {   // висит на стене, а курсор уже на открытом полу — отцепляем, предмет встанет на опору
-    const pf = hitPlaneY(lr, 0), fp = footprint(it);
-    if (pf && Math.abs(pf.x) < R.w / 2 - fp.hx - 0.15 && Math.abs(pf.z) < R.d / 2 - fp.hz - 0.15) {
-      g.float = g.hang = false; g.rel = 0; g.off = { x: 0, z: 0 }; g.base = restY(it, pf.x, pf.z);
+// Магнит при перетаскивании. Точка захвата на предмете даёт «щупы» — её проекции на грани габарита предмета
+// по его собственным осям. Нижний щуп ищет опору под собой, боковой прижимается к стене или к боку мебели,
+// верхний — к потолку. Точка захвата при этом остаётся под курсором, поэтому предмет не прыгает.
+function castScene(o, d, it) {          // первое, во что упирается луч: мебель или оболочка комнаты (в координатах world)
+  world.updateMatrixWorld(true);
+  const groups = [];
+  for (const q of state.items) if (q.id !== it.id && !dragSkip.has(q.id)) { const gr = objs.get(q.id); if (gr) groups.push(gr); }
+  downRay.set(o.clone().applyMatrix4(world.matrixWorld), d.clone().transformDirection(world.matrixWorld));
+  const hits = downRay.intersectObjects(groups, true);
+  if (wallMesh) for (const mesh of [wallMesh, floorMesh]) THREE.Mesh.prototype.raycast.call(mesh, downRay, hits);
+  hits.sort((a, b) => a.distance - b.distance);
+  const inv = new THREE.Matrix4().copy(world.matrixWorld).invert();
+  for (const h of hits) {
+    if (!h.face) continue;
+    const n = h.face.normal.clone().transformDirection(h.object.matrixWorld).transformDirection(inv);
+    const room = h.object === wallMesh || h.object === floorMesh;
+    let q = null;
+    if (!room) {
+      let gr = h.object;
+      while (gr && gr.parent !== itemsG) gr = gr.parent;
+      q = gr && item(gr.userData.id);
+      if (!q || n.y < -0.3) continue;                    // низ мебели опорой не бывает
+      if (n.y > 0.6 && NOSUP.has(q.type)) continue;      // на растение или лампу ничего не ставим
+      if (n.y > 0.6 && it.type === 'rug') continue;      // ковёр — только на пол
     }
+    return { p: world.worldToLocal(h.point.clone()), n, room, q };
   }
-  if (g.free || !snap) {
+  return null;
+}
+function dragMoveCore(it, g, lr) {
+  const R = state.room, st = state.snap;
+  if (g.free) {
     const p = hitPlaneY(lr, it.y + g.rel);
     if (!p) return false;
     [it.x, it.z] = snapPos(it, p.x + g.off.x, p.z + g.off.z);
-    if (!g.free) { it.y = restY(it, it.x, it.z); g.float = false; }
     return true;
   }
-  let x = 0, z = 0, p = null, ceil = false, stackY = null;
-  if (!g.float && !g.hang && it.type !== 'rug') {  // курсор на верхней грани другого предмета — ставим на неё
-    const t = topUnder(it, lr);
-    if (t && t.y + it.h <= ceilMin(it, t.x, t.z) + 1e-3) {
-      const pp = hitPlaneY(lr, t.y + g.rel), cand = [];
-      if (pp) cand.push([pp.x + g.off.x, pp.z + g.off.z]);
-      cand.push([t.x + g.off.x, t.z + g.off.z], [t.x, t.z]);
-      for (const [cx, cz] of cand) {
-        const ty = topOf(t.g, cx, cz);
-        if (ty === null || Math.abs(ty - t.y) > 0.25) continue;
-        x = cx; z = cz; stackY = ty; p = t;
-        break;
-      }
+  let x, z, y, float = false;
+  // нижний щуп: луч, опущенный на высоту захвата, ищет опору — пол или верх мебели
+  let h = castScene(lr.o.clone().setY(lr.o.y - g.rel), lr.d, it);
+  if (!h || h.n.y <= 0.6) h = castScene(lr.o, lr.d, it) || h;   // иначе смотрим, во что упирается сам курсор
+  if (!h) return false;
+  if (h.n.y > 0.6) {                    // опора под предметом
+    x = h.p.x + g.off.x; z = h.p.z + g.off.z; y = h.p.y;
+    if (h.room && st > 0) {             // на полу действуют сетка, края соседей и стены
+      const f = footprint(it);
+      [x, z] = snapPos(it, x, z);
+      if (R.w >= 2 * f.hx) x = clamp(x, -R.w / 2 + f.hx, R.w / 2 - f.hx);
+      if (R.d >= 2 * f.hz) z = clamp(z, -R.d / 2 + f.hz, R.d / 2 - f.hz);
+      y = floorAt(x, z);
+    }
+  } else if (h.n.y < -0.6) {            // потолок: верхний щуп
+    x = h.p.x + g.off.x; z = h.p.z + g.off.z;
+    y = ceilMin(it, x, z) - it.h;
+    float = true;
+  } else {                              // стена или бок мебели: боковой щуп прижимает предмет вплотную
+    const nh = new THREE.Vector2(h.n.x, h.n.z).normalize(), c = Math.cos(it.rot), sn = Math.sin(it.rot);
+    const e = (Math.abs(c * nh.x - sn * nh.y) * it.w) / 2 + (Math.abs(sn * nh.x + c * nh.y) * it.d) / 2;
+    const along = g.off.x * nh.x + g.off.z * nh.y;
+    x = h.p.x + nh.x * e + (g.off.x - along * nh.x);
+    z = h.p.z + nh.y * e + (g.off.z - along * nh.y);
+    const rest = restY(it, x, z);
+    y = rest;
+    if (h.room) {                       // по стене комнаты предмет можно поднять; у мебели он просто стоит рядом
+      const climb = h.p.y - g.rel, dead = g.float ? 0.05 : 0.35;
+      if (climb >= rest + dead) { y = st > 0 ? Math.round(climb / st) * st : climb; float = true; }
     }
   }
-  if (stackY === null) {
-    p = hitPlaneY(lr, (g.float ? it.y : g.base) + g.rel);
-    if (p && p.distanceTo(lr.o) > 80) p = null;
-    if (p) { x = p.x + g.off.x; z = p.z + g.off.z; }
-  }
-  if (!p) {                             // луч смотрит выше горизонта: цель — стена или потолок
-    const e = roomExit(lr);
-    if (!e) return false;
-    ceil = e.y > R.h - 1e-3;
-    x = e.x + (ceil ? 0 : g.off.x); z = e.z + (ceil ? 0 : g.off.z);
-  }
-  const f = footprint(it), fitX = R.w >= 2 * f.hx, fitZ = R.d >= 2 * f.hz;
-  // у стены: предмет упёрся в неё, либо уже висит на ней и остаётся вплотную
-  const tol = g.float ? -0.03 : 0.02;
-  const overX = fitX && (x - f.hx < -R.w / 2 - tol || x + f.hx > R.w / 2 + tol);
-  const overZ = fitZ && (z - f.hz < -R.d / 2 - tol || z + f.hz > R.d / 2 + tol);
-  [x, z] = snapPos(it, x, z);
-  if (fitX) x = clamp(x, -R.w / 2 + f.hx, R.w / 2 - f.hx);
-  if (fitZ) z = clamp(z, -R.d / 2 + f.hz, R.d / 2 - f.hz);
-  let climb = null;
-  if (overX && Math.abs(lr.d.x) > 1e-5) {
-    const t = (x - g.off.x - lr.o.x) / lr.d.x;
-    if (t > 0) { climb = lr.o.y + lr.d.y * t - g.rel; z = lr.o.z + lr.d.z * t + g.off.z; }
-  } else if (overZ && Math.abs(lr.d.z) > 1e-5) {
-    const t = (z - g.off.z - lr.o.z) / lr.d.z;
-    if (t > 0) { climb = lr.o.y + lr.d.y * t - g.rel; x = lr.o.x + lr.d.x * t + g.off.x; }
-  }
-  if (climb !== null) {
-    const st = state.snap;
-    x = Math.round(x / st) * st; z = Math.round(z / st) * st;
-    if (fitX) x = clamp(x, -R.w / 2 + f.hx, R.w / 2 - f.hx);
-    if (fitZ) z = clamp(z, -R.d / 2 + f.hz, R.d / 2 - f.hz);
-  }
-  const rest = stackY !== null ? r3(stackY) : restY(it, x, z);
-  let y = rest;                         // без стены и потолка предмет стоит на опоре
-  if (climb !== null) {
-    const dead = g.float ? 0.05 : 0.35;   // стоящий на полу предмет отрывается не сразу
-    y = climb < rest + dead ? rest : Math.round(climb / state.snap) * state.snap;
-  }
-  const ch = ceilMin(it, x, z);         // потолок может быть наклонным
-  if (ch >= it.h && (ceil || g.hang || y + it.h > ch - 0.06)) y = ch - it.h;
+  const ch = ceilMin(it, x, z);
+  if (ch >= it.h && y + it.h > ch - (float ? 0.06 : 0)) { y = ch - it.h; float = y > restY(it, x, z) + 0.02; }
   it.x = r3(x); it.z = r3(z); it.y = r3(y);
-  g.float = y > rest + 0.02;            // висит на стене или под потолком
-  g.base = rest;
+  g.float = float;
+  g.base = y;
   return true;
 }
 const AXES = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
