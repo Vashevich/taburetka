@@ -160,7 +160,9 @@ function fronts(b, w, h, d, cols, rows, y0, zc, handle = 'h') {
 export function applyAct(part, t) {
   const a = part.userData.act;
   part.userData.t = t;
-  if (a.kind === 'door') part.rotation.y = a.sign * t * 1.9;
+  if (a.kind === 'door') part.rotation.y = a.sign * t * (a.ang || 1.9);
+  else if (a.kind === 'turn') part.rotation[a.axis] = a.sign * t * a.ang;      // откидные части: крышки, спинки, столешницы
+  else if (a.kind === 'slide') part.position.x = a.x0 + t * a.travel;          // сдвижные полотна
   else part.position.z = a.z0 + t * a.travel;
 }
 
@@ -182,6 +184,38 @@ function sofa(b, w, d, h) {
   const inner = w - 2 * armW, n = Math.max(1, Math.round(inner / 0.7)), cw = inner / n;
   for (let i = 0; i < n; i++)
     b.box(cw - 0.012, 0.12, d - backD - 0.02, -inner / 2 + cw * (i + 0.5), baseH, backD / 2 - 0.01, b.m3);
+}
+
+const glassM = () => std('#bfe3f2', { transparent: true, opacity: 0.35, roughness: 0.1 });
+const POT = '#b0714f';
+function blob(b, x, y, z, sx, sy, sz, m = b.m, detail = 1) {   // крона, лист, подушка
+  const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(0.5, detail), m);
+  mesh.position.set(x, y, z); mesh.scale.set(sx, sy, sz);
+  return b.finish(mesh);
+}
+function pot(b, w, d, ph) { b.cyl(0.5, 0.38, ph, 0, 0, 0, std(POT), w, d); }
+// Рама окна или двери и створки. sections: −1 — петли слева, 1 — петли справа, 0 — глухая часть.
+function sashFrame(b, w, d, h, sections, sill = true) {
+  const f = 0.05, t = 0.035, sd = Math.min(d * 0.6, 0.05), n = sections.length;
+  for (const s of [-1, 1]) b.box(f, h, d, s * (w / 2 - f / 2), 0, 0);
+  if (sill) b.box(w - 2 * f, f, d, 0, 0, 0);
+  b.box(w - 2 * f, f, d, 0, h - f, 0);
+  const y0 = sill ? f : 0, sh = h - f - y0, mul = 0.04, sw = (w - 2 * f - (n - 1) * mul) / n;
+  sections.forEach((s, i) => {
+    const x0 = -w / 2 + f + i * (sw + mul);              // левый край секции
+    if (i) b.box(mul, sh, d, x0 - mul / 2, y0, 0);
+    const leaf = (cx) => {
+      for (const e of [-1, 1]) b.box(t, sh, sd, cx + e * (sw / 2 - t / 2), 0, 0);
+      b.box(sw - 2 * t, t, sd, cx, 0, 0);
+      b.box(sw - 2 * t, t, sd, cx, sh - t, 0);
+      b.box(sw - 2 * t, sh - 2 * t, 0.008, cx, t, 0, glassM());
+    };
+    if (!s) { const g = b.g; b.g = new THREE.Group(); b.g.position.set(x0 + sw / 2, y0, 0); leaf(0); g.add(b.g); b.g = g; return; }
+    b.part(s < 0 ? x0 : x0 + sw, y0, 0, { kind: 'door', sign: s }, () => {
+      leaf(-s * sw / 2);
+      b.box(0.02, 0.1, 0.04, -s * (sw - t / 2), Math.min(sh / 2, 1.05) - 0.05, sd / 2 + 0.02, b.m2);   // ручка
+    });
+  });
 }
 
 const BUILD = {
@@ -310,17 +344,20 @@ const BUILD = {
     b.box(w, h, d - 0.02, 0, 0, -0.01);
     b.box(w - 0.04, 0.08, 0.012, 0, h - 0.13, d / 2 - 0.014, b.m3);
     const r = Math.min(w, h) * 0.3;
-    const door = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.03, 32), std('#2b2f36', { roughness: 0.35 }));
-    door.rotation.x = Math.PI / 2;
-    door.scale.set(2 * r, 1, 2 * r);
-    door.position.set(0, h * 0.45, d / 2 - 0.005);
-    b.finish(door);
+    b.part(-r, h * 0.45, d / 2 - 0.005, { kind: 'door', sign: -1, ang: 1.7 }, () => {   // люк на петле слева
+      const door = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.03, 32), std('#2b2f36', { roughness: 0.35 }));
+      door.rotation.x = Math.PI / 2;
+      door.scale.set(2 * r, 1, 2 * r);
+      door.position.set(r, 0, 0);
+      b.finish(door);
+    });
   },
   bathtub(b, w, d, h) {
     b.box(w, h, d);
     b.box(w - 0.14, 0.012, d - 0.14, 0, h - 0.006, 0, std('#cfe4ee', { roughness: 0.3 }));
   },
   nightstand(b, w, d, h) { BUILD.dresser(b, w, d, h); },
+  tvstand(b, w, d, h) { BUILD.dresser(b, w, d, h); },
   bed(b, w, d, h) {
     const fh = Math.min(0.3, h * 0.35), mh = Math.min(0.22, h * 0.3), ht = 0.06;
     b.box(w, fh, d - ht, 0, 0, ht / 2, b.m2);
@@ -360,23 +397,250 @@ const BUILD = {
       b.box(0.02, 0.12, 0.09, lw - 0.08, 1.0 > h ? h / 2 : 1.0, 0, b.m2);
     });
   },
-  window(b, w, d, h) {
-    for (const s of [-1, 1]) b.box(0.05, h, d, s * (w / 2 - 0.025), 0, 0);
-    b.box(w - 0.1, 0.05, d, 0, 0, 0);
-    b.box(w - 0.1, 0.05, d, 0, h - 0.05, 0);
-    // две створки на петлях у боковин, открываются в комнату
-    const sw = (w - 0.1) / 2, sh = h - 0.1, t = 0.035, sd = Math.min(d * 0.6, 0.05);
-    const glass = std('#bfe3f2', { transparent: true, opacity: 0.35, roughness: 0.1 });
-    for (const s of [-1, 1]) {
-      b.part(s * (w / 2 - 0.05), 0.05, 0, { kind: 'door', sign: s }, () => {
-        const cx = -s * sw / 2;                           // створка тянется от петли к середине окна
-        for (const e of [-1, 1]) b.box(t, sh, sd, cx + e * (sw / 2 - t / 2), 0, 0);
-        b.box(sw - 2 * t, t, sd, cx, 0, 0);
-        b.box(sw - 2 * t, t, sd, cx, sh - t, 0);
-        b.box(sw - 2 * t, sh - 2 * t, 0.008, cx, t, 0, glass);
-        b.box(0.02, 0.1, 0.04, -s * (sw - t / 2), sh / 2 - 0.05, sd / 2 + 0.02, b.m2);   // ручка
-      });
+  window(b, w, d, h) { sashFrame(b, w, d, h, [-1, 1]); },
+  window1(b, w, d, h) { sashFrame(b, w, d, h, [-1]); },
+  window3(b, w, d, h) { sashFrame(b, w, d, h, [-1, 0, 1]); },
+  balcony(b, w, d, h) { sashFrame(b, w, d, h, [-1], false); },
+  panorama(b, w, d, h) {                 // глухая половина и сдвижная створка поверх неё
+    const f = 0.05, t = 0.04, sw = (w - 2 * f) / 2, sh = h - 2 * f;
+    for (const s of [-1, 1]) b.box(f, h, d, s * (w / 2 - f / 2), 0, 0);
+    b.box(w - 2 * f, f, d, 0, 0, 0);
+    b.box(w - 2 * f, f, d, 0, h - f, 0);
+    const pane = (z) => {
+      for (const e of [-1, 1]) b.box(t, sh, 0.03, e * (sw / 2 - t / 2), 0, z);
+      b.box(sw - 2 * t, t, 0.03, 0, 0, z); b.box(sw - 2 * t, t, 0.03, 0, sh - t, z);
+      b.box(sw - 2 * t, sh - 2 * t, 0.008, 0, t, z, glassM());
+    };
+    const g = b.g; b.g = new THREE.Group(); b.g.position.set(sw / 2, f, 0); pane(-0.018); g.add(b.g); b.g = g;
+    b.part(-sw / 2, f, 0, { kind: 'slide', x0: -sw / 2, travel: sw - t }, () => {
+      pane(0.018);
+      b.box(0.02, 0.14, 0.03, sw / 2 - 0.06, Math.min(sh / 2, 1.0), 0.045, b.m2);
+    });
+  },
+  roundwindow(b, w, d, h) {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.035, 10, 40), b.m);
+    ring.scale.set(w - 0.07, h - 0.07, d / 0.07); ring.position.set(0, h / 2, 0);
+    b.finish(ring);
+    const gl = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.008, 40), glassM());
+    gl.rotation.x = Math.PI / 2; gl.scale.set(w - 0.07, 1, h - 0.07); gl.position.set(0, h / 2, 0);
+    b.finish(gl);
+    b.box(0.03, h - 0.08, 0.03, 0, 0.04, 0); b.box(w - 0.08, 0.03, 0.03, 0, h / 2 - 0.015, 0);
+  },
+  door2(b, w, d, h) {                    // две распашные створки
+    for (const s of [-1, 1]) b.box(0.05, h, d, s * (w / 2 - 0.025), 0, 0, b.m2);
+    b.box(w - 0.1, 0.05, d, 0, h - 0.05, 0, b.m2);
+    const lw = (w - 0.1) / 2;
+    for (const s of [-1, 1]) b.part(s * lw, 0, 0, { kind: 'door', sign: s }, () => {
+      b.box(lw - 0.004, h - 0.05, 0.04, -s * lw / 2, 0, 0, b.m3);
+      b.box(0.02, 0.12, 0.09, -s * (lw - 0.07), Math.min(1.0, h / 2), 0, b.m2);
+    });
+  },
+  slidedoor(b, w, d, h) {                // полотно уезжает вбок вдоль стены
+    for (const s of [-1, 1]) b.box(0.05, h, d, s * (w / 2 - 0.025), 0, 0, b.m2);
+    b.box(w - 0.1, 0.05, d, 0, h - 0.05, 0, b.m2);
+    b.box(2 * w - 0.1, 0.04, 0.03, w / 2 - 0.05, h, d / 2 + 0.015, b.m2);       // рельс
+    b.part(0, 0, d / 2 + 0.025, { kind: 'slide', x0: 0, travel: w - 0.08 }, () => {
+      b.box(w - 0.06, h - 0.02, 0.04, 0, 0, 0, b.m3);
+      b.box(0.02, 0.3, 0.03, -(w / 2 - 0.1), Math.min(0.95, h / 2), 0.03, b.m2);
+    });
+  },
+  opening(b, w, d, h) {                  // прямой проём без полотна
+    for (const s of [-1, 1]) b.box(0.07, h, d, s * (w / 2 - 0.035), 0, 0);
+    b.box(w - 0.14, 0.07, d, 0, h - 0.07, 0);
+  },
+  arch(b, w, d, h) {                     // портал с полукруглым верхом
+    const j = 0.1, r = (w - 2 * j) / 2, sp = Math.max(0.1, h - j - r);
+    const s = new THREE.Shape();
+    s.moveTo(-w / 2, 0); s.lineTo(-w / 2, h); s.lineTo(w / 2, h); s.lineTo(w / 2, 0); s.lineTo(r, 0); s.lineTo(r, sp);
+    s.absarc(0, sp, r, 0, Math.PI, false);
+    s.lineTo(-r, 0); s.lineTo(-w / 2, 0);
+    const geo = new THREE.ExtrudeGeometry(s, { depth: d, bevelEnabled: false, curveSegments: 20 });
+    geo.translate(0, 0, -d / 2);
+    b.finish(new THREE.Mesh(geo, b.m));
+  },
+  // ── раскладная мебель ──
+  sofabed(b, w, d, h) {                  // сиденье выезжает вперёд, спинка-подушка откидывается на его место
+    const baseH = Math.min(0.3, h * 0.36), armW = Math.min(0.16, w * 0.12), bk = 0.08, ct = 0.16;
+    const inner = w - 2 * armW, sd = d - bk - ct, bh = Math.max(0.2, Math.min(h - baseH - 0.02, 0.5));
+    b.box(inner, baseH, bk + ct, 0, 0, -d / 2 + (bk + ct) / 2, b.m2);
+    b.box(inner, h - baseH, bk, 0, baseH, -d / 2 + bk / 2);
+    for (const s of [-1, 1]) b.box(armW, baseH + 0.26, d, s * (w / 2 - armW / 2), 0, 0);
+    b.box(inner - 0.04, baseH - 0.04, sd - 0.03, 0, 0, -d / 2 + bk + ct + (sd - 0.03) / 2, b.m2);   // короб под сиденьем
+    const zs = -d / 2 + bk + ct;
+    b.part(0, 0, zs, { kind: 'drawer', z0: zs, travel: bh }, () => {
+      b.box(inner - 0.01, baseH - 0.03, sd, 0, 0.03, sd / 2, b.m2);
+      b.box(inner - 0.01, 0.14, sd, 0, baseH, sd / 2, b.m3);
+    });
+    b.part(0, baseH, zs, { kind: 'turn', axis: 'x', sign: 1, ang: Math.PI / 2 }, () => {
+      b.box(inner - 0.01, bh, ct - 0.02, 0, 0, -ct / 2 + 0.01, b.m3);
+    });
+  },
+  recliner(b, w, d, h) {                 // подножка поднимается, спинка откидывается
+    const baseH = Math.min(0.3, h * 0.36), armW = Math.min(0.16, w * 0.18), bk = 0.16, D = d - 0.07, zc = -0.035;
+    const inner = w - 2 * armW;
+    b.box(w, baseH, D, 0, 0, zc, b.m2);
+    for (const s of [-1, 1]) b.box(armW, 0.26, D - bk, s * (w / 2 - armW / 2), baseH, zc + bk / 2);
+    b.box(inner - 0.01, 0.12, D - bk - 0.02, 0, baseH, zc + bk / 2 - 0.01, b.m3);
+    b.part(0, baseH, -d / 2 + bk, { kind: 'turn', axis: 'x', sign: -1, ang: 0.6 }, () => {
+      b.box(w, h - baseH, bk, 0, 0, -bk / 2);
+    });
+    b.part(0, baseH - 0.01, d / 2 - 0.07, { kind: 'turn', axis: 'x', sign: -1, ang: Math.PI / 2 }, () => {
+      b.box(inner - 0.02, baseH - 0.05, 0.06, 0, -(baseH - 0.05), 0.03, b.m3);
+    });
+  },
+  officechair(b, w, d, h) {
+    const sh = Math.min(0.48, h * 0.48);
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2, leg = b.box(0.04, 0.03, w * 0.48, Math.sin(a) * w * 0.24, 0.04, Math.cos(a) * w * 0.24, b.m2);
+      leg.rotation.y = a;
+      b.cyl(0.025, 0.025, 0.04, Math.sin(a) * w * 0.46, 0, Math.cos(a) * w * 0.46, b.m2);
     }
+    b.cyl(0.025, 0.025, sh - 0.12, 0, 0.06, 0, b.m2);
+    b.box(w * 0.85, 0.07, d * 0.8, 0, sh - 0.07, 0.02);
+    b.box(0.05, h - sh - 0.25, 0.03, 0, sh - 0.04, -d * 0.36, b.m2);
+    b.box(w * 0.8, Math.min(0.5, h - sh - 0.08), 0.06, 0, h - Math.min(0.5, h - sh - 0.08), -d * 0.38, b.m3);
+    for (const s of [-1, 1]) { b.box(0.04, 0.2, 0.04, s * w * 0.44, sh - 0.04, 0, b.m2); b.box(0.06, 0.03, d * 0.45, s * w * 0.44, sh + 0.16, 0.02, b.m2); }
+  },
+  booktable(b, w, d, h) {                // стол-книжка: крылья поднимаются по бокам
+    const bw = w - 0.06, t = 0.025, fl = Math.min(h - 0.08, 0.68);
+    b.box(bw, t, d, 0, h - t, 0);
+    for (const s of [-1, 1]) b.box(0.02, h - t, d - 0.1, s * (bw / 2 - 0.03), 0, 0, b.m2);
+    b.box(bw - 0.08, 0.3, 0.02, 0, h - t - 0.3, 0, b.m2);
+    for (const s of [-1, 1]) b.part(s * bw / 2, h, 0, { kind: 'turn', axis: 'z', sign: s, ang: Math.PI / 2 }, () => {
+      b.box(t, fl, d, s * t / 2, -fl, 0, b.m3);
+    });
+  },
+  exttable(b, w, d, h) {                 // раздвижной: половины столешницы разъезжаются, под ними вставка
+    const t = 0.03, ext = Math.min(0.25, w * 0.18);
+    legs(b, w - 0.1, d - 0.1, h - t, 0.05, 0);
+    b.box(w - 0.12, 0.08, d - 0.12, 0, h - t - 0.08, 0, b.m2);
+    b.box(2 * ext + 0.02, t - 0.006, d - 0.01, 0, h - t, 0, b.m3);
+    for (const s of [-1, 1]) b.part(s * w / 4, h - t, 0, { kind: 'slide', x0: s * w / 4, travel: s * ext }, () => {
+      b.box(w / 2 - 0.002, t, d, 0, 0, 0);
+    });
+  },
+  chest(b, w, d, h) {                    // сундук с откидной крышкой
+    const t = 0.025, H = h - 0.04;
+    b.box(w, t, d, 0, 0, 0, b.m2);
+    for (const s of [-1, 1]) b.box(t, H - t, d, s * (w / 2 - t / 2), t, 0);
+    for (const s of [-1, 1]) b.box(w - 2 * t, H - t, t, 0, t, s * (d / 2 - t / 2));
+    b.part(0, H, -d / 2, { kind: 'turn', axis: 'x', sign: -1, ang: 1.75 }, () => {
+      b.box(w + 0.01, 0.04, d + 0.01, 0, 0, d / 2, b.m3);
+      b.box(0.1, 0.03, 0.015, 0, -0.02, d + 0.012, b.m2);
+    });
+  },
+  sideboard(b, w, d, h) {                // буфет: внизу дверцы, сверху ряд ящиков
+    carcass(b, w, h, d - 0.02, -0.01, 0.018, 0.05);
+    const dr = Math.min(0.18, h * 0.22), cols = Math.max(2, Math.round(w / 0.45));
+    b.box(w - 0.036, 0.018, d - 0.032, 0, h - 0.02 - dr - 0.018, -0.006);
+    fronts(b, w, h - 0.07 - dr, d, cols, 1, 0.05, d / 2 - 0.01, 'v');
+    fronts(b, w, dr, d, cols, 1, h - 0.02 - dr, d / 2 - 0.01, 'h');
+  },
+  wallcabinet(b, w, d, h) {
+    carcass(b, w, h, d - 0.02, -0.01, 0.018, 0.018);
+    b.box(w - 0.036, 0.018, d - 0.032, 0, h / 2, -0.006);
+    fronts(b, w, h - 0.02, d, Math.max(1, Math.round(w / 0.45)), 1, 0.01, d / 2 - 0.01, 'v');
+  },
+  // ── техника и сантехника ──
+  stove(b, w, d, h) {                    // плита: дверца духовки откидывается вниз
+    const D = d - 0.03, zc = -0.015, t = 0.03;
+    carcass(b, w, h - 0.02, D, zc, t, 0.1);
+    b.box(w - 2 * t, 0.012, D - 0.06, 0, 0.1 + (h - 0.3) / 2, zc, b.m2);
+    b.box(w, 0.02, d, 0, h - 0.02, 0, std('#22262b', { roughness: 0.4 }));
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) b.cyl(0.5, 0.5, 0.006, sx * w * 0.22, h, sz * d * 0.2, std('#0d1014'), w * 0.3, w * 0.3);
+    b.box(w - 0.006, 0.12, 0.03, 0, h - 0.145, d / 2 - 0.015, b.m3);
+    for (let i = 0; i < 4; i++) b.cyl(0.018, 0.018, 0.02, (i - 1.5) * w * 0.2, h - 0.095, d / 2 + 0.008, b.m2).rotation.x = Math.PI / 2;
+    const dh = h - 0.26;
+    b.part(0, 0.1, d / 2 - 0.015, { kind: 'turn', axis: 'x', sign: 1, ang: 1.5 }, () => {
+      b.box(w - 0.006, dh, 0.03, 0, 0.004, 0, b.m3);
+      b.box(w * 0.6, dh * 0.5, 0.006, 0, dh * 0.22, 0.016, std('#1a1d22', { roughness: 0.3 }));
+      b.box(w * 0.7, 0.02, 0.03, 0, dh - 0.06, 0.03, b.m2);
+    });
+  },
+  toilet(b, w, d, h) {                   // крышка поднимается
+    const sh = Math.min(0.42, h * 0.52), tk = Math.min(0.2, d * 0.28), white = b.m;
+    b.box(w, h - sh + 0.02, tk, 0, sh - 0.02, -d / 2 + tk / 2, white);
+    b.cyl(0.3, 0.22, sh * 0.55, 0, 0, 0.02, white, w * 0.9, (d - tk) * 0.9);
+    b.cyl(0.5, 0.36, sh * 0.45, 0, sh * 0.55 - 0.02, tk / 2, white, w * 0.86, d - tk);
+    b.part(0, sh + 0.005, -d / 2 + tk + 0.01, { kind: 'turn', axis: 'x', sign: -1, ang: 1.65 }, () => {
+      const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.025, 28), b.m3);
+      lid.scale.set(w * 0.86, 1, d - tk - 0.02); lid.position.set(0, 0.0125, (d - tk - 0.02) / 2);
+      b.finish(lid);
+    });
+  },
+  sink(b, w, d, h) {                     // раковина на тумбе с дверцами
+    const t = 0.05, H = h - t;
+    carcass(b, w, H, d - 0.04, -0.02, 0.018, 0.08);
+    fronts(b, w, H - 0.09, d, Math.max(1, Math.round(w / 0.45)), 1, 0.08, d / 2 - 0.03, 'v');
+    b.box(w, t, d, 0, H, 0, std('#f4f4f1', { roughness: 0.3 }));
+    b.cyl(0.5, 0.5, 0.008, 0, h - 0.004, 0.02, std('#cfe4ee', { roughness: 0.3 }), w * 0.62, d * 0.55);
+    b.cyl(0.014, 0.014, 0.16, 0, h, -d / 2 + 0.07, b.m2);
+    b.box(0.024, 0.02, 0.12, 0, h + 0.14, -d / 2 + 0.12, b.m2);
+  },
+  shower(b, w, d, h) {                   // душевая кабина со стеклянной дверью
+    b.box(w, 0.08, d, 0, 0, 0, std('#f1f1ee'));
+    const p = 0.03;
+    for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) b.box(p, h - 0.08, p, x * (w / 2 - p / 2), 0.08, z * (d / 2 - p / 2), b.m2);
+    b.box(w - 2 * p, h - 0.1, 0.008, 0, 0.08, -d / 2 + p / 2, glassM());
+    for (const s of [-1, 1]) b.box(0.008, h - 0.1, d - 2 * p, s * (w / 2 - p / 2), 0.08, 0, glassM());
+    b.cyl(0.012, 0.012, h - 0.5, -w / 2 + 0.12, 0.3, -d / 2 + 0.08, b.m2);
+    b.cyl(0.5, 0.5, 0.02, -w / 2 + 0.2, h - 0.22, -d / 2 + 0.16, b.m2, 0.2, 0.2);
+    b.part(-w / 2 + p, 0.08, d / 2 - p / 2, { kind: 'door', sign: -1, ang: 1.6 }, () => {
+      b.box(w - 2 * p, h - 0.1, 0.008, (w - 2 * p) / 2, 0, 0, glassM());
+      b.box(0.02, 0.3, 0.03, w - 2 * p - 0.06, Math.min(1.0, h / 2), 0.02, b.m2);
+    });
+  },
+  // ── растения и декор ──
+  ficus(b, w, d, h) {
+    const ph = Math.min(0.32, h * 0.2);
+    pot(b, w * 0.5, d * 0.5, ph);
+    b.cyl(0.02, 0.03, h * 0.5, 0, ph, 0, std('#7a5a3c'));
+    const m2 = std(b.m.color.clone().multiplyScalar(0.85));
+    blob(b, 0, h * 0.74, 0, w * 0.8, h * 0.5, d * 0.8);
+    blob(b, -w * 0.22, h * 0.6, d * 0.12, w * 0.55, h * 0.3, d * 0.55, m2);
+    blob(b, w * 0.2, h * 0.86, -d * 0.1, w * 0.5, h * 0.26, d * 0.5, m2);
+  },
+  palm(b, w, d, h) {
+    const ph = Math.min(0.3, h * 0.18), top = h * 0.72;
+    pot(b, w * 0.4, d * 0.4, ph);
+    b.cyl(0.025, 0.04, top - ph, 0, ph, 0, std('#7a5a3c'));
+    for (let i = 0; i < 8; i++) {                         // листья веером, концы свисают
+      const a = (i / 8) * Math.PI * 2, L = w * 0.48, leaf = blob(b, Math.sin(a) * L * 0.5, top + (i % 2 ? 0.02 : h * 0.1), Math.cos(a) * L * 0.5, 0.14, 0.03, L, b.m, 0);
+      leaf.rotation.order = 'YXZ';
+      leaf.rotation.set(i % 2 ? 0.35 : -0.25, a, 0);
+    }
+    blob(b, 0, top + h * 0.12, 0, 0.1, h * 0.3, 0.1);
+  },
+  cactus(b, w, d, h) {
+    const ph = Math.min(0.14, h * 0.25);
+    pot(b, w * 0.8, d * 0.8, ph);
+    blob(b, 0, ph + (h - ph) / 2, 0, w * 0.42, h - ph, d * 0.42);
+    blob(b, -w * 0.3, ph + (h - ph) * 0.5, 0, w * 0.24, (h - ph) * 0.45, d * 0.24);
+    blob(b, w * 0.3, ph + (h - ph) * 0.62, 0, w * 0.22, (h - ph) * 0.36, d * 0.22);
+  },
+  sansev(b, w, d, h) {                   // пучок высоких острых листьев
+    const ph = Math.min(0.22, h * 0.28);
+    pot(b, w * 0.85, d * 0.85, ph);
+    const m2 = std(b.m.color.clone().multiplyScalar(0.8));
+    [[0, 0, 1, 0], [-0.2, 0.1, 0.8, 0.5], [0.2, -0.08, 0.86, 1.2], [0.05, 0.2, 0.7, 2.1], [-0.1, -0.2, 0.62, 2.8], [0.24, 0.16, 0.55, 0.9]].forEach(([x, z, k, a], i) => {
+      const leaf = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1, 4), i % 2 ? m2 : b.m), lh = (h - ph) * k;
+      leaf.scale.set(w * 0.2, lh, d * 0.06); leaf.position.set(x * w, ph + lh / 2, z * d); leaf.rotation.y = a;
+      b.finish(leaf);
+    });
+  },
+  flowers(b, w, d, h) {                  // ваза с цветами
+    const vh = h * 0.45;
+    b.cyl(0.3, 0.5, vh, 0, 0, 0, std('#dfe6ea', { roughness: 0.3 }), w * 0.45, d * 0.45);
+    const green = std('#5f8f4e');
+    [[-0.25, 0.1, 1], [0.2, 0.2, 0.9], [0, -0.22, 0.95], [0.28, -0.12, 0.8], [-0.12, -0.05, 0.86]].forEach(([x, z, k]) => {
+      b.seg([0, vh * 0.8, 0], [x * w, h * k - 0.04, z * d], 0.006, green);
+      blob(b, x * w, h * k - 0.04, z * d, w * 0.26, 0.08, d * 0.26, b.m, 0);
+    });
+  },
+  roundrug(b, w, d, h) { b.cyl(0.5, 0.5, h, 0, 0, 0, b.m, w, d); },
+  mirror(b, w, d, h) {
+    b.box(w, h, d, 0, 0, 0, b.m2);
+    b.box(w - 0.06, h - 0.06, 0.006, 0, 0.03, d / 2, std('#c9d6dc', { roughness: 0.08, metalness: 0.6 }));
   },
   // Деревянный человечек художника: яйцо-голова, грудь клином, шар-талия, таз колоколом, конечности на шарах.
   // Позы: stand — стоит (начало координат под ступнями); sit — сидит на краю, голени свисают; sitf — сидит, ноги вперёд;
@@ -472,20 +736,53 @@ export const CATALOG = [
   { type: 'wall', name: 'Перегородка', w: 2.0, d: 0.1, h: 2.7, color: '#f2efe9' },
   { type: 'door', name: 'Дверь', w: 0.9, d: 0.1, h: 2.05, color: '#d9c7a8' },
   { type: 'window', name: 'Окно', w: 1.4, d: 0.1, h: 1.4, y: 0.85, color: '#f5f5f2' },
+  { type: 'sofabed', name: 'Диван-кровать', w: 2.0, d: 0.95, h: 0.85, color: '#8c9aa8' },
+  { type: 'recliner', name: 'Кресло-реклайнер', w: 0.85, d: 0.95, h: 1.0, color: '#7a6a5a' },
+  { type: 'officechair', name: 'Офисное кресло', w: 0.6, d: 0.6, h: 1.1, color: '#3a3f47' },
+  { type: 'booktable', name: 'Стол-книжка', w: 0.4, d: 0.8, h: 0.75, color: '#c8a27a' },
+  { type: 'exttable', name: 'Раздвижной стол', w: 1.4, d: 0.85, h: 0.75, color: '#c8a27a' },
+  { type: 'chest', name: 'Сундук', w: 0.9, d: 0.45, h: 0.5, color: '#a9825a' },
+  { type: 'sideboard', name: 'Буфет', w: 1.6, d: 0.45, h: 0.85, color: '#e9e4da' },
+  { type: 'tvstand', name: 'ТВ-тумба', w: 1.6, d: 0.4, h: 0.45, color: '#e9e4da' },
+  { type: 'wallcabinet', name: 'Навесной шкаф', w: 0.8, d: 0.32, h: 0.7, y: 1.45, color: '#e9e4da' },
+  { type: 'stove', name: 'Плита с духовкой', w: 0.6, d: 0.6, h: 0.86, color: '#e3e5e6' },
+  { type: 'toilet', name: 'Унитаз', w: 0.38, d: 0.68, h: 0.8, color: '#f4f4f1' },
+  { type: 'sink', name: 'Раковина с тумбой', w: 0.7, d: 0.48, h: 0.85, color: '#e9e4da' },
+  { type: 'shower', name: 'Душевая кабина', w: 0.9, d: 0.9, h: 2.0, color: '#d5d9dc' },
+  { type: 'window1', name: 'Окно одностворчатое', w: 0.7, d: 0.1, h: 1.4, y: 0.85, color: '#f5f5f2' },
+  { type: 'window3', name: 'Окно трёхстворчатое', w: 2.1, d: 0.1, h: 1.4, y: 0.85, color: '#f5f5f2' },
+  { type: 'panorama', name: 'Панорамное окно', w: 2.4, d: 0.1, h: 2.2, y: 0.1, color: '#f5f5f2' },
+  { type: 'roundwindow', name: 'Круглое окно', w: 0.8, d: 0.1, h: 0.8, y: 1.3, color: '#f5f5f2' },
+  { type: 'balcony', name: 'Балконная дверь', w: 0.8, d: 0.1, h: 2.15, color: '#f5f5f2' },
+  { type: 'door2', name: 'Двустворчатая дверь', w: 1.4, d: 0.1, h: 2.05, color: '#d9c7a8' },
+  { type: 'slidedoor', name: 'Раздвижная дверь', w: 0.9, d: 0.1, h: 2.05, color: '#d9c7a8' },
+  { type: 'opening', name: 'Проём', w: 1.0, d: 0.14, h: 2.1, color: '#f2efe9' },
+  { type: 'arch', name: 'Арка', w: 1.2, d: 0.14, h: 2.3, color: '#f2efe9' },
+  { type: 'ficus', name: 'Фикус', w: 0.8, d: 0.8, h: 1.7, color: '#5f8f4e' },
+  { type: 'palm', name: 'Пальма', w: 1.3, d: 1.3, h: 1.9, color: '#4f8a52' },
+  { type: 'sansev', name: 'Сансевиерия', w: 0.35, d: 0.35, h: 0.8, color: '#4e7d55' },
+  { type: 'cactus', name: 'Кактус', w: 0.3, d: 0.3, h: 0.55, color: '#5f8f4e' },
+  { type: 'flowers', name: 'Ваза с цветами', w: 0.3, d: 0.3, h: 0.45, color: '#b5553c' },
+  { type: 'roundrug', name: 'Круглый ковёр', w: 1.6, d: 1.6, h: 0.012, color: '#8c9aa8' },
+  { type: 'mirror', name: 'Зеркало', w: 0.6, d: 0.03, h: 1.5, y: 0.3, color: '#3a332b' },
   { type: 'human', name: 'Человек', w: 0.5, d: 0.3, h: 1.75, color: '#e6cfa3' },
 ];
 
-export const CATS = [['all', 'Всё'], ['seat', 'Сиденья'], ['table', 'Столы'], ['store', 'Шкафы и полки'],
-  ['bedbath', 'Спальня и ванная'], ['tech', 'Техника'], ['room', 'Двери и стены'], ['decor', 'Декор']];
+export const CATS = [['all', 'Всё'], ['seat', 'Сиденья и кровати'], ['table', 'Столы'], ['store', 'Шкафы и полки'],
+  ['tech', 'Техника и сантехника'], ['room', 'Окна, двери, перегородки'], ['decor', 'Декор']];
 const CAT_OF = {
-  seat: ['stool', 'chair', 'armchair', 'sofa', 'cornersofa', 'pouf', 'bench', 'barstool'],
-  table: ['table', 'coffeetable', 'roundtable', 'desk'],
-  store: ['wardrobe', 'dresser', 'shelf', 'wallshelf', 'kitchen', 'box'],
-  bedbath: ['bed', 'nightstand', 'bathtub', 'washer'],
-  tech: ['fridge', 'tv', 'lamp'],
-  room: ['wall', 'door', 'window'],
-  decor: ['plant', 'rug', 'picture', 'human'],
+  seat: ['stool', 'chair', 'armchair', 'recliner', 'officechair', 'sofa', 'sofabed', 'cornersofa', 'pouf', 'bench', 'barstool', 'bed'],
+  table: ['table', 'exttable', 'booktable', 'coffeetable', 'roundtable', 'desk'],
+  store: ['wardrobe', 'dresser', 'nightstand', 'sideboard', 'tvstand', 'chest', 'shelf', 'wallshelf', 'wallcabinet', 'kitchen', 'box'],
+  tech: ['fridge', 'stove', 'washer', 'sink', 'bathtub', 'shower', 'toilet', 'tv', 'lamp'],
+  room: ['wall', 'door', 'door2', 'slidedoor', 'balcony', 'opening', 'arch', 'window', 'window1', 'window3', 'panorama', 'roundwindow'],
+  decor: ['plant', 'ficus', 'palm', 'sansev', 'cactus', 'flowers', 'rug', 'roundrug', 'picture', 'mirror', 'human'],
 };
+// На эти предметы ничего не ставится; ковры лежат только на полу.
+export const NOSUP_T = ['door2', 'slidedoor', 'balcony', 'opening', 'arch', 'window1', 'window3', 'panorama', 'roundwindow',
+  'ficus', 'palm', 'sansev', 'cactus', 'flowers', 'mirror', 'shower', 'officechair'];
+export const RUGS = new Set(['rug', 'roundrug']);
+CATALOG.sort((a, b) => { const o = Object.values(CAT_OF).flat(); return o.indexOf(a.type) - o.indexOf(b.type); });
 for (const d of CATALOG) d.cat = Object.keys(CAT_OF).find((k) => CAT_OF[k].includes(d.type)) || 'decor';
 
 export function fillBlank(group, type, w, d, h, color, open, pose) {

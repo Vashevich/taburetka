@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=48';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS } from './furniture.js?v=49';
 
 const STORE = 'taburetka.project.v1';
 
@@ -458,7 +458,7 @@ function snapPos(it, x, z) {
   return [r3(nx), r3(nz)];
 }
 // ── «гравитация»: на что встанет предмет в точке (x, z) ──
-const NOSUP = new Set(['wall', 'door', 'window', 'human', 'plant', 'lamp', 'tv', 'picture']);
+const NOSUP = new Set(['wall', 'door', 'window', 'human', 'plant', 'lamp', 'tv', 'picture', ...NOSUP_T]);
 const downRay = new THREE.Raycaster();
 // То, что стоит на предмете, едет вместе с ним и не считается ему опорой.
 let dragSkip = new Set();
@@ -499,7 +499,7 @@ function setPose(it, pose, exact) {
 }
 function restY(it, x, z) {
   const fl = floorAt(x, z);              // пол может быть неровным
-  if (it.type === 'rug') return fl;
+  if (RUGS.has(it.type)) return fl;
   const cands = [];
   for (const o of state.items) {
     if (o.id === it.id || NOSUP.has(o.type) || dragSkip.has(o.id)) continue;
@@ -602,7 +602,7 @@ function castScene(o, d, it) {          // первое, во что упира�
       q = gr && item(gr.userData.id);
       if (!q || n.y < -0.3) continue;                    // низ мебели опорой не бывает
       if (n.y > 0.6 && NOSUP.has(q.type)) continue;      // на растение или лампу ничего не ставим
-      if (n.y > 0.6 && it.type === 'rug') continue;      // ковёр — только на пол
+      if (n.y > 0.6 && RUGS.has(it.type)) continue;      // ковёр — только на пол
     }
     return { p: world.worldToLocal(h.point.clone()), n, room, q };
   }
