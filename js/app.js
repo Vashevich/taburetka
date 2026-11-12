@@ -6,7 +6,7 @@ import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, fillBlank, applyAct, EDGE } from './furniture.js?v=3';
+import { CATALOG, fillBlank, applyAct, EDGE } from './furniture.js?v=4';
 
 const LIBS = 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/';
 const KHR = 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/';
@@ -394,6 +394,28 @@ function restY(it, x, z) {
   if (level + it.h > state.room.h + 1e-3) level = 0;
   return r3(Math.max(0, level));
 }
+function topOf(group, x, z) {            // высота верхней поверхности предмета в точке (x, z)
+  world.updateMatrixWorld(true);
+  downRay.set(new THREE.Vector3(x, 1000, z).applyMatrix4(world.matrixWorld),
+    new THREE.Vector3(0, -1, 0).transformDirection(world.matrixWorld));
+  const h = downRay.intersectObject(group, true)[0];
+  return h ? world.worldToLocal(h.point.clone()).y : null;
+}
+function topUnder(it, lr) {             // на чью верхнюю грань смотрит курсор (сам предмет не в счёт)
+  const cands = [];
+  for (const o of state.items) if (o.id !== it.id && !NOSUP.has(o.type)) { const g = objs.get(o.id); if (g) cands.push(g); }
+  if (!cands.length) return null;
+  world.updateMatrixWorld(true);
+  downRay.set(lr.o.clone().applyMatrix4(world.matrixWorld), lr.d.clone().transformDirection(world.matrixWorld));
+  const h = downRay.intersectObjects(cands, true)[0];
+  if (!h || !h.face) return null;
+  const n = h.face.normal.clone().transformDirection(h.object.matrixWorld);
+  if (n.y < 0.6) return null;
+  let g = h.object;
+  while (g && g.parent !== itemsG) g = g.parent;
+  const pl = world.worldToLocal(h.point.clone());
+  return g ? { x: pl.x, y: pl.y, z: pl.z, g } : null;
+}
 function roomExit(lr) {                 // точка, в которой луч выходит из объёма комнаты
   const R = state.room, mn = [-R.w / 2, 0, -R.d / 2], mx = [R.w / 2, R.h, R.d / 2];
   const o = lr.o.toArray(), d = lr.d.toArray();
@@ -419,16 +441,25 @@ function dragMove(it, g, lr) {
     [it.x, it.z] = snapPos(it, p.x + g.off.x, p.z + g.off.z);
     return true;
   }
-  let base = g.float ? it.y : g.base, x = 0, z = 0, p = null, ceil = false;
-  for (let i = 0; i < 2; i++) {
-    p = hitPlaneY(lr, base + g.rel);
+  let x = 0, z = 0, p = null, ceil = false, stackY = null;
+  if (!g.float && it.type !== 'rug') {  // курсор на верхней грани другого предмета — ставим на неё
+    const t = topUnder(it, lr);
+    if (t && t.y + it.h <= R.h + 1e-3) {
+      const pp = hitPlaneY(lr, t.y + g.rel), cand = [];
+      if (pp) cand.push([pp.x + g.off.x, pp.z + g.off.z]);
+      cand.push([t.x + g.off.x, t.z + g.off.z], [t.x, t.z]);
+      for (const [cx, cz] of cand) {
+        const ty = topOf(t.g, cx, cz);
+        if (ty === null || Math.abs(ty - t.y) > 0.25) continue;
+        x = cx; z = cz; stackY = ty; p = t;
+        break;
+      }
+    }
+  }
+  if (stackY === null) {
+    p = hitPlaneY(lr, (g.float ? it.y : g.base) + g.rel);
     if (p && p.distanceTo(lr.o) > 80) p = null;
-    if (!p) break;
-    x = p.x + g.off.x; z = p.z + g.off.z;
-    if (g.float) break;
-    const s = restY(it, x, z);
-    if (Math.abs(s - base) < 1e-4) break;
-    base = s;
+    if (p) { x = p.x + g.off.x; z = p.z + g.off.z; }
   }
   if (!p) {                             // луч смотрит выше горизонта: цель — стена или потолок
     const e = roomExit(lr);
@@ -456,7 +487,7 @@ function dragMove(it, g, lr) {
     if (fitX) x = clamp(x, -R.w / 2 + f.hx, R.w / 2 - f.hx);
     if (fitZ) z = clamp(z, -R.d / 2 + f.hz, R.d / 2 - f.hz);
   }
-  const rest = restY(it, x, z);
+  const rest = stackY !== null ? r3(stackY) : restY(it, x, z);
   let y = g.float ? it.y : rest;
   if (climb !== null) {
     const dead = g.float ? 0.05 : 0.35;   // стоящий на полу предмет отрывается не сразу
