@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=42';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=43';
 
 const STORE = 'taburetka.project.v1';
 
@@ -1047,6 +1047,9 @@ function updateConstSize() {
       }
     }
     o.position.copy(A).lerp(B, best);
+    // чуть к зрителю, чтобы табличка не тонула в поверхности, на которой лежит размер
+    if (c.isOrthographicCamera) o.position.y += s * o.userData.aspect * 0.5;
+    else o.position.add(_c.copy(cl).sub(o.position).normalize().multiplyScalar(s * o.userData.aspect * 0.5));
   }
 }
 function pickHandle() {
@@ -1061,7 +1064,7 @@ function pickHandle() {
 }
 
 // ───────────────────────── рулетка ─────────────────────────
-const DIM = new THREE.MeshBasicMaterial({ color: 0xa61e1e, depthTest: false, transparent: true });
+const DIM = new THREE.MeshBasicMaterial({ color: 0xa61e1e });   // размер стоит в пространстве: мебель его заслоняет
 const BAR_GEO = new THREE.CylinderGeometry(1, 1, 1, 8), DOT_GEO = new THREE.SphereGeometry(1, 14, 10);
 let measureA = null;
 const LABEL_GEO = new THREE.PlaneGeometry(1, 1);
@@ -1080,7 +1083,7 @@ function makeLabel(text) {
   x.fillText(text, c.width / 2, 34);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const sp = new THREE.Mesh(LABEL_GEO, new THREE.MeshBasicMaterial({ map: tex, depthTest: false, transparent: true, side: THREE.DoubleSide }));
+  const sp = new THREE.Mesh(LABEL_GEO, new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide }));
   sp.userData = { label: true, aspect: c.width / c.height };
   sp.renderOrder = 20;
   sp.raycast = () => {};
@@ -1103,7 +1106,7 @@ function dimObjects(group, a, b) {       // жирная линия размер
     dot.raycast = () => {};
     group.add(dot);
   }
-  const lab = makeLabel(fmt(len).replace(' см', ''));   // табличка лежит вдоль линии, прямо на ней
+  const lab = makeLabel(`${Math.round(len * 100)} см`);   // табличка лежит вдоль линии, прямо на ней
   lab.position.copy(a).add(b).multiplyScalar(0.5);
   lab.userData.a = a.clone(); lab.userData.b = b.clone();
   group.add(lab);
