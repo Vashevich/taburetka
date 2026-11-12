@@ -206,6 +206,3 @@ dialog::backdrop { background: rgba(232, 218, 187, .72); }
 @media (max-width: 640px) { #tools button { padding: 6px 4px; font-size: 9.5px; letter-spacing: .02em; } }
 #catCats { margin: 0; padding: 10px 10px 0; }
 .grid button { touch-action: pan-y; -webkit-user-select: none; user-select: none; }
-#roomBar { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(86px + var(--safe-b)); z-index: 9; display: flex; flex-wrap: wrap;
-  justify-content: center; gap: 6px; max-width: calc(100vw - 16px); }
-#roomBar button { box-shadow: 3px 3px 0 var(--ink); }
