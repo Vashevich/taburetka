@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=18';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=19';
 
 const STORE = 'taburetka.project.v1';
 
@@ -193,9 +193,8 @@ function meshEdges() {
   return [...out.values()];
 }
 // Излом: нажали на ребро в точке t — разрез идёт кольцом через противоположные рёбра соседних граней.
-function loopCut(a, b, t) {
-  const m = roomMesh();
-  if (m.v.length > 160) { toast('В комнате уже очень много изломов'); return false; }
+function loopCut(a, b, t, m = roomMesh(), segs = null) {
+  if (m.v.length > 160) { if (!segs) toast('В комнате уже очень много изломов'); return false; }
   const cut = new Map(), queue = [[a, b, t]], key = (p, q) => (p < q ? p + '_' + q : q + '_' + p);
   while (queue.length) {
     const [p, q, tt] = queue.pop();
@@ -215,12 +214,33 @@ function loopCut(a, b, t) {
     for (let i = 0; i < 2 && !done; i++) {
       const [p, q, r, s] = [f[i], f[i + 1], f[(i + 2) % 4], f[(i + 3) % 4]];
       const c1 = cut.get(key(p, q)), c2 = cut.get(key(r, s));
-      if (c1 !== undefined && c2 !== undefined) { faces.push([p, c1, c2, s], [c1, q, r, c2]); done = true; }
+      if (c1 !== undefined && c2 !== undefined) { faces.push([p, c1, c2, s], [c1, q, r, c2]); if (segs) segs.push(m.v[c1], m.v[c2]); done = true; }
     }
     if (!done) faces.push(f);
   }
   m.f = faces;
   return true;
+}
+// Грани остаются плоскими: если сдвиг точки согнул бы грань, вместе с точкой едет вся эта грань.
+function planarQuad(p) {
+  for (let k = 0; k < 4; k++) {
+    const a = p[k], b = p[(k + 1) % 4], c = p[(k + 2) % 4], e = p[(k + 3) % 4];
+    const n = b.clone().sub(a).cross(c.clone().sub(a)), len = n.length();
+    if (len > 1e-6) return Math.abs(n.dot(e.clone().sub(a))) / len < 0.002;
+  }
+  return true;
+}
+function expandMove(ids, dir) {
+  const m = roomMesh(), S = new Set(ids);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const f of m.f) {
+      const cnt = f.filter((i) => S.has(i)).length;
+      if (cnt === 0 || cnt === 4) continue;
+      if (planarQuad(f.map(mv)) && !planarQuad(f.map((i) => (S.has(i) ? mv(i).addScaledVector(dir, 0.5) : mv(i))))) { f.forEach((i) => S.add(i)); grew = true; }
+    }
+  }
+  return [...S];
 }
 function recenterRoom() {               // габариты комнаты — по сетке; центр возвращаем в ноль, сдвигая всё разом
   const R = state.room, m = roomMesh(), bb = new THREE.Box3();
@@ -735,7 +755,7 @@ function updateGizmo() {
     m.f.forEach((f, i) => {
       const c = new THREE.Vector3(), n = faceNormal(f);
       for (const id of f) c.add(mv(id));
-      mk(c.multiplyScalar(1 / f.length), { kind: 'f', ids: [...f], key: 'f' + i, n }, 0xc9963b, 0.006, 'face', n);
+      mk(c.multiplyScalar(1 / f.length), { kind: 'f', ids: [...f], key: 'f' + i, n }, 0x1f6feb, 0.006, 'face', n);
     });
     const sp = sunPos();                // солнце: нажмите — появятся стрелки
     mk(sp, { kind: 'sun', ids: [], key: 'sun' }, 0xffb300, 0.02);
@@ -1039,16 +1059,16 @@ function beginDrag(lr, direct) {
   if (tool === 'room') {
     const h = pickHandle();
     if (!h) return null;
-    const u = h.userData, snap = (el) => (el.kind === 'sun' ? null : el.ids.map((i) => [i, [...roomMesh().v[i]]]));
+    const u = h.userData, snap = (el, dir) => (el.kind === 'sun' ? null : expandMove(el.ids, dir).map((i) => [i, [...roomMesh().v[i]]]));
     if (u.arrow) {                      // стрелка: двигаем выделенное вдоль оси, от места захвата, без прыжка
       const a0 = gizmo.userData.selPos;
       if (!roomSel || !a0) return null;
       const dir = AXES[u.axis].clone();
-      return { mode: 'room', kind: 'axis', dir, a0: a0.clone(), s0: axisParam(lr, a0, dir), sel: roomSel, v0: snap(roomSel), p0: sunPos(), direct: false };
+      return { mode: 'room', kind: 'axis', dir, a0: a0.clone(), s0: axisParam(lr, a0, dir), sel: roomSel, v0: snap(roomSel, dir), p0: sunPos(), direct: false };
     }
     const el = u.el, a0 = h.position.clone();
     if (el.kind === 'f')                // плашку грани можно сразу тянуть вдоль её нормали
-      return { mode: 'room', kind: 'axis', dir: el.n.clone(), a0, s0: axisParam(lr, a0, el.n), sel: el, v0: snap(el), direct: true };
+      return { mode: 'room', kind: 'axis', dir: el.n.clone(), a0, s0: axisParam(lr, a0, el.n), sel: el, v0: snap(el, el.n), direct: true };
     return { mode: 'room', kind: 'none', sel: el, direct: true };
   }
   const it = sel();
@@ -1106,7 +1126,13 @@ function endRoomDrag(d) {
   if (d.sel.kind !== 'sun') { recenterRoom(); buildRoom(); updateGizmo(); rebuildDims(); fitOrtho(); }
 }
 // Ребро под курсором: здесь можно поставить излом.
-const cutMarker = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffc400, depthTest: false, transparent: true }));
+const cutMarker = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color: 0xd11919, depthTest: false, transparent: true }));
+const cutLine = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xd11919, depthTest: false, transparent: true }));
+cutLine.renderOrder = 25;
+cutLine.visible = false;
+cutLine.raycast = () => {};
+cutLine.frustumCulled = false;
+world.add(cutLine);
 cutMarker.renderOrder = 26;
 cutMarker.visible = false;
 cutMarker.raycast = () => {};
@@ -1125,10 +1151,17 @@ function findCut() {
   }
   return best;
 }
-function showCut(c) {
+function showCut(c) {                   // красная точка на ребре и линия будущего излома через соседние грани
+  const same = c && cutHover && c.a === cutHover.a && c.b === cutHover.b && c.t === cutHover.t;
   cutHover = c;
-  cutMarker.visible = !!c;
-  if (c) cutMarker.position.copy(c.p);
+  cutMarker.visible = cutLine.visible = !!c;
+  if (!c) return;
+  cutMarker.position.copy(c.p);
+  if (same) return;
+  const segs = [], copy = JSON.parse(JSON.stringify(roomMesh()));
+  loopCut(c.a, c.b, c.t, copy, segs);
+  cutLine.geometry.dispose();
+  cutLine.geometry = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(segs.flat(), 3));
 }
 function doCut(c) {
   if (!c || !loopCut(c.a, c.b, c.t)) return;
@@ -1700,7 +1733,7 @@ function vmDraw() {
     x.font = '20px "PT Mono", ui-monospace, monospace'; x.fillStyle = '#5a5147';
     x.fillText(`${cm(R.w)} × ${cm(R.d)} × ${cm(R.h)} см`, 24, 180);
     x.font = 'italic 22px "PT Serif", Georgia, serif'; x.fillStyle = '#5a5147'; x.textAlign = 'left';
-    ['Точки — углы, чёрточки — рёбра,', 'плашки — грани стен, пола и потолка.', '', 'Нажмите на элемент — появятся стрелки,', 'тяните за стрелку: он двигается по этой оси.', 'Плашку грани можно тянуть сразу.', '', 'Нажмите на ребро в любом другом месте —', 'там появится излом.', '', 'Жёлтое солнце — направление света.']
+    ['Точки — углы, чёрточки — рёбра,', 'синие плашки — грани стен, пола и потолка.', 'Грани остаются плоскими.', '', 'Нажмите на элемент — появятся стрелки,', 'тяните за стрелку: он двигается по этой оси.', 'Плашку грани можно тянуть сразу.', '', 'Нажмите на ребро в любом другом месте —', 'красная линия покажет излом, нажатие поставит.', '', 'Жёлтое солнце — направление света.']
       .forEach((t, i) => x.fillText(t, 24, 236 + i * 36));
   } else {
   let chx = 20, chy = 116;
