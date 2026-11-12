@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=40';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=41';
 
 const STORE = 'taburetka.project.v1';
 
@@ -1018,7 +1018,7 @@ function updateConstSize() {
     const px = (p, out) => { _v.copy(p).applyMatrix4(world.matrixWorld).project(c); out.set(_v.x * W, _v.y * Hh); return Math.abs(_v.z) <= 1; };
     if (!px(A, _pa) || !px(B, _pb)) { o.position.copy(A).add(B).multiplyScalar(0.5); continue; }
     let ang = Math.atan2(_pb.y - _pa.y, _pb.x - _pa.x);
-    if (ang > Math.PI / 2 + 1e-3) ang -= Math.PI; else if (ang <= -Math.PI / 2 + 1e-3) ang += Math.PI;   // текст читается слева направо или снизу вверх
+    if (ang > 1.83) ang -= Math.PI; else if (ang <= -1.31) ang += Math.PI;   // текст читается слева направо, на крутых линиях — снизу вверх
     o.quaternion.multiply(_q.setFromAxisAngle(_zAxis, ang));
     let best = 0.5;
     if (handles.length && tool !== 'room') {
