@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=PT+Mono&family=PT+Sans:wght@400;700&family=PT+Serif:ital,wght@0,400;1,400&display=swap">
-<link rel="stylesheet" href="style.css?v=26">
+<link rel="stylesheet" href="style.css?v=27">
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
@@ -129,9 +129,10 @@
           <option value="0.25">25 см</option>
         </select></label>
     </div>
+    <div class="row checks"><label><input id="rGrid" type="checkbox"> показывать сетку</label></div>
     <div class="swrow"><span>Пол</span><div id="rFloorSw" class="swatches"></div></div>
     <div class="swrow"><span>Стены</span><div id="rWallSw" class="swatches"></div></div>
-    <p class="hint">Привязка действует на сетку, стены и края соседней мебели; поворот — с шагом 15°.</p>
+    <p class="hint">Мелкая сетка на полу — шаг привязки, крупная — 1 м. Клавиша G прячет и возвращает сетку. Привязка действует на сетку, стены и края соседней мебели; поворот — с шагом 15°.</p>
     <div class="row end"><button value="cancel" formnovalidate>Отмена</button><button id="rOk" value="ok" class="primary">Применить</button></div>
   </form>
 </dialog>
@@ -179,7 +180,7 @@
 <div id="toast" hidden></div>
 <input id="fileProject" type="file" accept=".json,application/json" hidden>
 
-<script type="module" src="js/app.js?v=26"></script>
+<script type="module" src="js/app.js?v=27"></script>
 <noscript>Для работы приложения нужен JavaScript.</noscript>
 </body>
 </html>

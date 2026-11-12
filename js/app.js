@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=26';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=27';
 
 const STORE = 'taburetka.project.v1';
 
@@ -106,6 +106,7 @@ function normalize(d) {
         : room.sun && Number.isFinite(room.sun.az) && Number.isFinite(room.sun.el) ? { sun: { az: room.sun.az, el: room.sun.el } } : {}),
     },
     snap: num(d.snap, 0.05),
+    grid: d.grid !== false,
     dims: Array.isArray(d.dims) ? d.dims.filter((m) => m && m.a && m.b) : [],
     items: (Array.isArray(d.items) ? d.items : []).filter((i) => i && i.type && i.type !== 'model').map((i) => ({
       ...i, id: i.id || uid(), name: String(i.name || 'Предмет'),
@@ -115,7 +116,7 @@ function normalize(d) {
   };
 }
 
-const serialize = () => JSON.stringify({ v: 1, room: state.room, snap: state.snap, items: state.items, dims: state.dims });
+const serialize = () => JSON.stringify({ v: 1, room: state.room, snap: state.snap, grid: state.grid !== false, items: state.items, dims: state.dims });
 function save() { try { localStorage.setItem(STORE, cur); } catch { /* приватный режим */ } }
 function commit() {
   const s = serialize();
@@ -367,13 +368,19 @@ function buildRoom() {
   for (const [a, b] of meshEdges()) epos.push(...m.v[a], ...m.v[b]);
   wallEdges = new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(epos, 3)), EDGE);
 
-  const pts = [];
-  if (flat) {                           // сетка по полу — только пока пол ровный
-    for (let x = Math.ceil(-w / 2 / 0.5) * 0.5; x <= w / 2 + 1e-6; x += 0.5) pts.push(x, 0, -d / 2, x, 0, d / 2);
-    for (let z = Math.ceil(-d / 2 / 0.5) * 0.5; z <= d / 2 + 1e-6; z += 0.5) pts.push(-w / 2, 0, z, w / 2, 0, z);
+  // двойная сетка по полу (пока он ровный): мелкая, еле заметная, — шаг привязки; крупная — ровно 1 м
+  const fine = [], big = [], st = state.snap >= 0.05 ? state.snap : state.snap > 0 ? state.snap * 10 : 0;
+  if (flat) {
+    const lines = (step, out) => {
+      for (let x = Math.ceil(-w / 2 / step - 1e-6) * step; x <= w / 2 + 1e-6; x += step) out.push(x, 0, -d / 2, x, 0, d / 2);
+      for (let z = Math.ceil(-d / 2 / step - 1e-6) * step; z <= d / 2 + 1e-6; z += step) out.push(-w / 2, 0, z, w / 2, 0, z);
+    };
+    if (st > 0 && st < 1) lines(st, fine);
+    lines(1, big);
   }
-  gridLines = new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pts, 3)),
-    new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.1 }));
+  const gl = (pts, opacity) => new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pts, 3)),
+    new THREE.LineBasicMaterial({ color: 0x1b1a18, transparent: true, opacity }));
+  gridLines = new THREE.Group().add(gl(fine, 0.05), gl(big, 0.2));
   gridLines.position.y = 0.003;
 
   const o = [-w / 2, 0, -d / 2, w / 2, 0, -d / 2, w / 2, 0, d / 2, -w / 2, 0, d / 2];
@@ -1713,6 +1720,7 @@ const MENU = {
     $('#rW').value = cm(R.w); $('#rD').value = cm(R.d); $('#rH').value = cm(R.h);
     markSwatch($('#rFloorSw'), R.floor); markSwatch($('#rWallSw'), R.wall); $('#rSnap').value = String(state.snap);
     if (!$('#rSnap').value) $('#rSnap').value = '0.05';
+    $('#rGrid').checked = state.grid !== false;
     $('#roomDlg').showModal();
   },
   save() { download(new Blob([JSON.stringify(JSON.parse(cur), null, 1)], { type: 'application/json' }), 'taburetka-project.json'); },
@@ -1725,9 +1733,9 @@ const MENU = {
   glb: exportGLB,
   cleardims() { state.dims = []; measureA = null; clearGroup(tmpG); rebuildDims(); commit(); },
   new() {                               // комната по умолчанию: размеры, ровный потолок, свет, вид и стартовая мебель
-    const snap = state.snap;
+    const snap = state.snap, grid = state.grid;
     state.room = { w: 4, d: 5, h: 2.7, floor: '#d9c7a8', wall: '#f4f1ea' };
-    load({ ...demo(), snap });
+    load({ ...demo(), snap, grid });
     commit();
     homeView();
     toast('Новая комната. Вернуть прежнюю — кнопка ↶');
@@ -1747,6 +1755,7 @@ $('#roomDlg').addEventListener('close', () => {
     state.room.mesh = { ...old.mesh, v: old.mesh.v.map((q) => [r3(q[0] * kx), r3(q[1] * ky), r3(q[2] * kz)]) };
   }
   state.snap = parseFloat($('#rSnap').value) || 0;
+  state.grid = $('#rGrid').checked;
   buildRoom(); fitOrtho(); commit();
 });
 
@@ -1763,6 +1772,7 @@ addEventListener('keydown', (e) => {
   else if (k === 'i' || k === 'ш') setTool('act');
   else if (k === 'x' || k === 'ч') setTool('erase');
   else if (k === 'c' || k === 'с') setTool('room');
+  else if (k === 'g' || k === 'п') { state.grid = state.grid === false; updateXRVis(); commit(); }
   else if (k === 'r' || k === 'к') setTool('rotate');
   else if (k === 'p' || k === 'з') setTool('pull');
   else if (k === 't' || k === 'е') setTool('measure');
@@ -2183,7 +2193,9 @@ function updateXRVis() {
   ground.visible = !pass && !xr.mini;
   scene.background = pass ? null : SKY;
   scene.fog = pass ? null : FOG;
-  floorMesh.visible = gridLines.visible = wallMesh.visible = wallEdges.visible = !bare;
+  floorMesh.visible = wallMesh.visible = wallEdges.visible = !bare;
+  gridLines.visible = !bare && state.grid !== false;
+  farGrid.visible = state.grid !== false;
   outline.visible = shadowFloor.visible = bare;
   world.visible = !ar || xr.anchored;
   const b = $('[data-xr="mini"]');
