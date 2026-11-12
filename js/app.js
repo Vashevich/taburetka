@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=37';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=38';
 
 const STORE = 'taburetka.project.v1';
 
@@ -972,12 +972,12 @@ function addGumball(it) {
     put(ar, new THREE.ConeGeometry(0.07, 0.22, 16).translate(0, 1.1, 0));
     for (const t of [0.45, 0.8, 1.1]) grip(ar, [0, t, 0], { kind: 'move', axis });
     const sc = part(HCOL[axis], rx, rz);                    // кубик за стрелкой: тянуть эту сторону
-    put(sc, new THREE.BoxGeometry(0.13, 0.13, 0.13).translate(0, 1.5, 0), 13);
+    put(sc, new THREE.BoxGeometry(0.1, 0.1, 0.1).translate(0, 1.5, 0), 13);
     grip(sc, [0, 1.5, 0], { kind: 'scale', axis, sign: 1 });
     if (axis === 'y') continue;
     const sb = part(HCOL[axis], rx, rz);                    // кубик с обратной стороны: тянуть противоположную грань
     put(sb, new THREE.CylinderGeometry(0.012, 0.012, 0.6, 6).translate(0, -0.3, 0));
-    put(sb, new THREE.BoxGeometry(0.13, 0.13, 0.13).translate(0, -0.62, 0), 13);
+    put(sb, new THREE.BoxGeometry(0.1, 0.1, 0.1).translate(0, -0.62, 0), 13);
     grip(sb, [0, -0.62, 0], { kind: 'scale', axis, sign: -1 });
   }
   const arc = part(HCOL.y, 0, 0);                           // дуга между красной и зелёной стрелкой: поворот
@@ -1455,7 +1455,9 @@ function applyPull(it, d, lr) {
     if (Math.abs(den) < 1e-5) return false;
     const t = new THREE.Vector3(d.x0, 0, d.z0).sub(lr.o).dot(n) / den;
     if (!(t > 0)) return false;
-    const nh = snapLen(Math.max(0.01, lr.o.y + lr.d.y * t - it.y));
+    const yy = lr.o.y + lr.d.y * t;
+    if (d.l0 === undefined) { d.l0 = yy; return false; }   // тянем от места захвата, без прыжка
+    const nh = snapLen(Math.max(0.01, d.h0 + yy - d.l0));
     f = nh / d.h0;
     it.h = r3(nh);
     if (it.keep) { it.w = r3(d.w0 * f); it.d = r3(d.d0 * f); }
@@ -1466,7 +1468,8 @@ function applyPull(it, d, lr) {
   const c = Math.cos(d.rot), s = Math.sin(d.rot), dx = p.x - d.x0, dz = p.z - d.z0;
   const l = d.axis === 'x' ? c * dx - s * dz : s * dx + c * dz;
   const size0 = d.axis === 'x' ? d.w0 : d.d0;
-  const ns = snapLen(Math.max(0.02, d.sign * l + size0 / 2));
+  if (d.l0 === undefined) { d.l0 = l; return false; }
+  const ns = snapLen(Math.max(0.02, d.sign * (l - d.l0) + size0));
   const shift = (d.sign * (ns - size0)) / 2;
   f = ns / size0;
   if (d.axis === 'x') { it.w = r3(ns); it.x = r3(d.x0 + shift * c); it.z = r3(d.z0 - shift * s); if (it.keep) { it.d = r3(d.d0 * f); it.h = r3(d.h0 * f); } }
