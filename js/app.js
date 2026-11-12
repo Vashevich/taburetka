@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=22';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=23';
 
 const STORE = 'taburetka.project.v1';
 
@@ -83,7 +83,7 @@ function demo() {
 
 function validMesh(m) {
   return !!m && Array.isArray(m.v) && m.v.length >= 4 && m.v.length <= 400 && m.v.every((p) => Array.isArray(p) && p.length === 3 && p.every(Number.isFinite))
-    && Array.isArray(m.f) && m.f.length >= 4 && m.f.every((f) => Array.isArray(f) && f.length === 4 && f.every((i) => Number.isInteger(i) && i >= 0 && i < m.v.length));
+    && Array.isArray(m.f) && m.f.length >= 4 && m.f.every((f) => Array.isArray(f) && f.length >= 3 && f.length <= 60 && f.every((i) => Number.isInteger(i) && i >= 0 && i < m.v.length));
 }
 function normalize(d) {
   const num = (v, def) => (Number.isFinite(+v) ? +v : def);
@@ -192,43 +192,41 @@ function meshEdges() {
   }
   return [...out.values()];
 }
-// Излом: нажали на ребро в точке t — разрез идёт кольцом через противоположные рёбра соседних граней.
-function loopCut(a, b, t, m = roomMesh(), segs = null) {
-  if (m.v.length > 160) { if (!segs) toast('В комнате уже очень много изломов'); return false; }
-  const cut = new Map(), queue = [[a, b, t]], key = (p, q) => (p < q ? p + '_' + q : q + '_' + p);
-  while (queue.length) {
-    const [p, q, tt] = queue.pop();
-    if (cut.has(key(p, q))) continue;
-    const P = m.v[p], Q = m.v[q];
-    m.v.push([0, 1, 2].map((k) => r3(P[k] + (Q[k] - P[k]) * tt)));
-    cut.set(key(p, q), m.v.length - 1);
-    for (const f of m.f) for (let i = 0; i < 4; i++) {
-      const u = f[i], w = f[(i + 1) % 4], r = f[(i + 2) % 4], s = f[(i + 3) % 4];
-      if (u === p && w === q) queue.push([s, r, tt]);        // противоположное ребро, та же доля от «своего» конца
-      else if (u === q && w === p) queue.push([r, s, tt]);
-    }
+// Разрез одной грани по линии между двумя точками на её рёбрах.
+function insertOnEdge(a, b, t, m = roomMesh()) {   // новая вершина на ребре a–b, доля t от a; попадает во все грани с этим ребром
+  const P = m.v[a], Q = m.v[b];
+  m.v.push([0, 1, 2].map((k) => r3(P[k] + (Q[k] - P[k]) * t)));
+  const n = m.v.length - 1;
+  for (const f of m.f) for (let i = 0; i < f.length; i++) {
+    const u = f[i], w = f[(i + 1) % f.length];
+    if ((u === a && w === b) || (u === b && w === a)) { f.splice(i + 1, 0, n); break; }
   }
-  const faces = [];
-  for (const f of m.f) {
-    let done = false;
-    for (let i = 0; i < 2 && !done; i++) {
-      const [p, q, r, s] = [f[i], f[i + 1], f[(i + 2) % 4], f[(i + 3) % 4]];
-      const c1 = cut.get(key(p, q)), c2 = cut.get(key(r, s));
-      if (c1 !== undefined && c2 !== undefined) { faces.push([p, c1, c2, s], [c1, q, r, c2]); if (segs) segs.push(m.v[c1], m.v[c2]); done = true; }
-    }
-    if (!done) faces.push(f);
-  }
-  m.f = faces;
+  return n;
+}
+function commonFace(e1, e2, m = roomMesh()) {      // грань, у которой есть оба ребра
+  const has = (f, [a, b]) => f.some((u, i) => { const w = f[(i + 1) % f.length]; return (u === a && w === b) || (u === b && w === a); });
+  return m.f.findIndex((f) => has(f, e1) && has(f, e2));
+}
+function cutFace(A, B) {                // A, B — { a, b, t } на двух разных рёбрах одной грани
+  const m = roomMesh();
+  if (m.v.length > 200) { toast('В комнате уже очень много изломов'); return false; }
+  const fi = commonFace([A.a, A.b], [B.a, B.b]);
+  if (fi < 0) return false;
+  const v1 = insertOnEdge(A.a, A.b, A.t), v2 = insertOnEdge(B.a, B.b, B.t);
+  const f = m.f[fi], i1 = f.indexOf(v1), i2 = f.indexOf(v2);
+  if (i1 < 0 || i2 < 0) return false;
+  const lo = Math.min(i1, i2), hi = Math.max(i1, i2);
+  m.f.splice(fi, 1, f.slice(lo, hi + 1), [...f.slice(hi), ...f.slice(0, lo + 1)]);
   return true;
 }
-// Грани остаются плоскими: если сдвиг точки согнул бы грань, вместе с точкой едет вся эта грань.
-function planarQuad(p) {
-  for (let k = 0; k < 4; k++) {
-    const a = p[k], b = p[(k + 1) % 4], c = p[(k + 2) % 4], e = p[(k + 3) % 4];
-    const n = b.clone().sub(a).cross(c.clone().sub(a)), len = n.length();
-    if (len > 1e-6) return Math.abs(n.dot(e.clone().sub(a))) / len < 0.002;
-  }
-  return true;
+// Грани остаются плоскими: если сдвиг согнул бы грань, вместе с точкой едет вся эта грань.
+function planarPoly(p) {
+  const n = new THREE.Vector3(), c = new THREE.Vector3();
+  for (let i = 0; i < p.length; i++) { n.add(p[i].clone().cross(p[(i + 1) % p.length])); c.add(p[i]); }
+  const len = n.length();
+  if (len < 1e-6) return true;
+  n.multiplyScalar(1 / len); c.multiplyScalar(1 / p.length);
+  return p.every((q) => Math.abs(n.dot(q.clone().sub(c))) < 0.002);
 }
 function expandMove(ids, dir) {
   const m = roomMesh(), S = new Set(ids);
@@ -236,8 +234,8 @@ function expandMove(ids, dir) {
     grew = false;
     for (const f of m.f) {
       const cnt = f.filter((i) => S.has(i)).length;
-      if (cnt === 0 || cnt === 4) continue;
-      if (planarQuad(f.map(mv)) && !planarQuad(f.map((i) => (S.has(i) ? mv(i).addScaledVector(dir, 0.5) : mv(i))))) { f.forEach((i) => S.add(i)); grew = true; }
+      if (cnt === 0 || cnt === f.length) continue;
+      if (planarPoly(f.map(mv)) && !planarPoly(f.map((i) => (S.has(i) ? mv(i).addScaledVector(dir, 0.5) : mv(i))))) { f.forEach((i) => S.add(i)); grew = true; }
     }
   }
   return [...S];
@@ -301,12 +299,17 @@ function applySun() {
 function buildRoom() {
   disposeChildren(roomG);
   const { w, d, floor, wall } = state.room, m = roomMesh();
-  // оболочка: пол отдельно (свой цвет), стены и потолок вместе; неплоская грань сама делится по диагонали
+  // оболочка: пол отдельно (свой цвет), стены и потолок вместе; грани — плоские многоугольники
   const fpos = [], spos = [];
   let flat = true;
   for (const f of m.f) {
-    const up = faceNormal(f).y > 0.7, out = up ? fpos : spos, [a, b, c, e] = f.map((i) => m.v[i]);
-    out.push(...a, ...b, ...c, ...a, ...c, ...e);
+    const n = faceNormal(f), up = n.y > 0.7, out = up ? fpos : spos, P = f.map(mv);
+    const u = new THREE.Vector3(Math.abs(n.y) < 0.9 ? 0 : 1, Math.abs(n.y) < 0.9 ? 1 : 0, 0).cross(n).normalize(), w = n.clone().cross(u);
+    const tris = P.length === 3 ? [[0, 1, 2]] : THREE.ShapeUtils.triangulateShape(P.map((q) => new THREE.Vector2(q.dot(u), q.dot(w))), []);
+    for (const [i, j, k] of tris) {
+      const a = P[i], b = P[j], c = P[k], flip = b.clone().sub(a).cross(c.clone().sub(a)).dot(n) < 0;
+      out.push(a.x, a.y, a.z, ...(flip ? [c.x, c.y, c.z, b.x, b.y, b.z] : [b.x, b.y, b.z, c.x, c.y, c.z]));
+    }
     if (up && f.some((i) => Math.abs(m.v[i][1]) > 1e-3)) flat = false;
   }
   const geo = (pos) => { const g = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.computeVertexNormals(); return g; };
@@ -314,7 +317,9 @@ function buildRoom() {
   floorMesh.receiveShadow = true;
   wallMesh = new THREE.Mesh(geo(spos), new THREE.MeshStandardMaterial({ color: wall, roughness: 1 }));
   wallMesh.receiveShadow = true;
-  wallEdges = new THREE.LineSegments(new THREE.EdgesGeometry(geo([...fpos, ...spos]), 1), EDGE);
+  const epos = [];                      // все рёбра граней, включая линии разреза на ровной поверхности
+  for (const [a, b] of meshEdges()) epos.push(...m.v[a], ...m.v[b]);
+  wallEdges = new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(epos, 3)), EDGE);
 
   const pts = [];
   if (flat) {                           // сетка по полу — только пока пол ровный
@@ -775,7 +780,8 @@ function updateGizmo() {
       const hold = new THREE.Group();
       hold.position.copy(selPos);
       gizmo.add(hold);
-      addArrows(hold, ['x', 'y', 'z']);
+      const free = roomSel.kind === 'sun' ? [] : ['x', 'y', 'z'].filter((ax) => expandMove(roomSel.ids, AXES[ax]).length === roomSel.ids.length);
+      addArrows(hold, free.length ? free : ['x', 'y', 'z']);   // если сам не двигается никуда — тянет соседние грани
     }
     return;
   }
@@ -1041,7 +1047,7 @@ function measurePoint() {
 let drag = null, down = null;
 
 function startDrag(d, e) {
-  showCut(null);
+  cancelCut();
   drag = d;
   d.pid = e.pointerId;
   d.changed = false;
@@ -1131,49 +1137,59 @@ function endRoomDrag(d) {
   }
   if (d.sel.kind !== 'sun') { recenterRoom(); buildRoom(); updateGizmo(); rebuildDims(); fitOrtho(); }
 }
-// Ребро под курсором: здесь можно поставить излом.
+// Точка на ребре под курсором. only — список рёбер, среди которых искать (для второй точки разреза).
 const cutMarker = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color: 0xd11919, depthTest: false, transparent: true }));
-const cutLine = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xd11919, depthTest: false, transparent: true }));
-cutLine.renderOrder = 25;
-cutLine.visible = false;
-cutLine.raycast = () => {};
-cutLine.frustumCulled = false;
-world.add(cutLine);
-cutMarker.renderOrder = 26;
-cutMarker.visible = false;
-cutMarker.raycast = () => {};
-world.add(cutMarker);
-let cutHover = null;
+const cutMarkerA = cutMarker.clone();
+const cutLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+  new THREE.LineBasicMaterial({ color: 0xd11919, depthTest: false, transparent: true }));
+for (const o of [cutMarker, cutMarkerA, cutLine]) { o.renderOrder = 26; o.visible = false; o.raycast = () => {}; o.frustumCulled = false; world.add(o); }
+let cutHover = null, cutA = null;       // cutA — первая точка разреза, ждём вторую
+function cutEdges() {                    // рёбра, на которые можно поставить вторую точку: те же грани, другое ребро
+  if (!cutA) return meshEdges();
+  const out = new Map();
+  for (const f of roomMesh().f) {
+    const es = f.map((u, i) => [Math.min(u, f[(i + 1) % f.length]), Math.max(u, f[(i + 1) % f.length])]);
+    if (!es.some(([a, b]) => a === cutA.a && b === cutA.b)) continue;
+    for (const [a, b] of es) if (a !== cutA.a || b !== cutA.b) out.set(a + '_' + b, [a, b]);
+  }
+  return [...out.values()];
+}
 function findCut() {
   world.updateMatrixWorld(true);
   let best = null, bd = coarse ? 28 : 13;
   const ps = new THREE.Vector3();
-  for (const [a, b] of meshEdges()) {
+  for (const [a, b] of cutEdges()) {
     const A = mv(a).applyMatrix4(world.matrixWorld), B = mv(b).applyMatrix4(world.matrixWorld), len = A.distanceTo(B);
     if (len < 0.05) continue;
     ray.ray.distanceSqToSegment(A, B, undefined, ps);
     const t = A.distanceTo(ps) / len, local = world.worldToLocal(ps.clone()), dpx = pxDist(local);
-    if (dpx < bd && t > 0.05 && t < 0.95) { bd = dpx; best = { a, b, t: Math.round(t * 100) / 100, p: local }; }
+    if (dpx < bd && t > 0.04 && t < 0.96) { bd = dpx; best = { a, b, t: Math.round(t * 100) / 100, p: local }; }
   }
+  if (best) best.p = mv(best.a).lerp(mv(best.b), best.t);
   return best;
 }
-function showCut(c) {                   // красная точка на ребре и линия будущего излома через соседние грани
-  const same = c && cutHover && c.a === cutHover.a && c.b === cutHover.b && c.t === cutHover.t;
+function showCut(c) {                   // красная точка под курсором; после первой точки — линия будущего разреза
   cutHover = c;
-  cutMarker.visible = cutLine.visible = !!c;
-  if (!c) return;
-  cutMarker.position.copy(c.p);
-  if (same) return;
-  const segs = [], copy = JSON.parse(JSON.stringify(roomMesh()));
-  loopCut(c.a, c.b, c.t, copy, segs);
-  cutLine.geometry.dispose();
-  cutLine.geometry = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(segs.flat(), 3));
+  cutMarker.visible = !!c;
+  cutMarkerA.visible = !!cutA;
+  cutLine.visible = !!c && !!cutA;
+  if (c) cutMarker.position.copy(c.p);
+  if (cutA) cutMarkerA.position.copy(cutA.p);
+  if (c && cutA) { cutLine.geometry.setFromPoints([cutA.p, c.p]); }
 }
-function doCut(c) {
-  if (!c || !loopCut(c.a, c.b, c.t)) return;
-  roomSel = null;
+function cancelCut() { cutA = null; showCut(null); }
+function tapCut() {                     // нажатие в «Комнате» мимо ручек: первая точка, вторая точка — разрез
+  const c = findCut();
+  if (!c) {
+    if (cutA) cancelCut(); else if (roomSel) { roomSel = null; updateGizmo(); }
+    return;
+  }
+  if (!cutA) { cutA = c; showCut(null); updateStatus(); return; }
+  const A = cutA;
+  cutA = null;
   showCut(null);
-  buildRoom(); updateGizmo(); commit();
+  if (cutFace(A, c)) { roomSel = null; buildRoom(); updateGizmo(); commit(); }
+  updateStatus();
 }
 function updateDrag(d, lr) {
   if (d.mode === 'room') return updateRoomDrag(d, lr);
@@ -1308,8 +1324,7 @@ function onTap(e) {
   if (tool === 'measure') { measureTap(); return; }
   if (tool === 'erase') { doErase(eraseTarget()); return; }
   if (tool === 'room') {                // нажатие по ребру — излом; мимо всего — снять выделение
-    const c = findCut();
-    if (c) doCut(c); else if (roomSel) { roomSel = null; updateGizmo(); }
+    tapCut();
     return;
   }
   const pk = pickItem();
@@ -1351,7 +1366,7 @@ canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 // ───────────────────────── интерфейс ─────────────────────────
 const HINTS = {
   select: 'Тащите предмет: он всегда примагничен — к полу, к другой мебели, к стене или потолку. Поднять в воздух — инструмент «По осям»',
-  room: 'Комната: нажмите на точку, чёрточку-ребро или плашку грани — появятся стрелки, тяните за них. Нажатие по ребру в другом месте ставит там излом. Солнце — направление света',
+  room: 'Комната: нажмите на точку, ребро или плашку грани — появятся стрелки. Разрез грани: нажмите на ребро, затем на другое ребро той же грани. Солнце — направление света',
   erase: 'Ластик: наведите на предмет или размер — он станет красным — и нажмите, чтобы удалить',
   act: 'Нажимайте на дверцы и ящики — они открываются и закрываются',
   move3d: 'Тащите стрелку: красная и зелёная — вдоль пола, синяя — вверх-вниз',
@@ -1362,7 +1377,8 @@ const HINTS = {
 function updateStatus() {
   const it = sel();
   let s = HINTS[tool];
-  if (tool === 'act' || tool === 'erase' || tool === 'room') s = HINTS[tool];
+  if (tool === 'room') s = cutA ? 'Разрез: теперь нажмите на другое ребро той же грани — красная линия показывает, где он пройдёт' : HINTS.room;
+  else if (tool === 'act' || tool === 'erase') s = HINTS[tool];
   else if (tool === 'measure') s = (measureA ? 'Рулетка: укажите вторую точку' : HINTS.measure) + (snapKind ? ` · привязка: ${snapKind}` : '');
   else if (it) s = `${it.name} — ${fmt(it.w)} × ${fmt(it.d)} × ${fmt(it.h)}`.replace(/ см(?= ×)/g, '');
   $('#status').textContent = s;
@@ -1376,6 +1392,7 @@ function setTool(t) {
   vm.dirty = true;
   if (t === 'room') selId = null;
   roomSel = null;
+  cutA = null;
   showCut(null);
   updateProps();
   for (const b of $$('#tools [data-tool]')) b.classList.toggle('on', b.dataset.tool === t);
@@ -1616,7 +1633,7 @@ addEventListener('keydown', (e) => {
   else if (k === 'p' || k === 'з') setTool('pull');
   else if (k === 't' || k === 'е') setTool('measure');
   else if (k === 'a' || k === 'ф') toggleCatalog();
-  else if (k === 'escape') { if (measureA) setTool('measure'); else if (!catalogEl.hidden) toggleCatalog(false); else select(null); }
+  else if (k === 'escape') { if (cutA) { cancelCut(); updateStatus(); } else if (measureA) setTool('measure'); else if (!catalogEl.hidden) toggleCatalog(false); else select(null); }
   else if ((k === 'delete' || k === 'backspace') && it) removeItem(it.id);
   else if (k === 'q' || k === 'й') rotateSel(Math.PI / 2);
   else if (k === 'e' || k === 'у') rotateSel(-Math.PI / 2);
@@ -1739,7 +1756,7 @@ function vmDraw() {
     x.font = '20px "PT Mono", ui-monospace, monospace'; x.fillStyle = '#5a5147';
     x.fillText(`${cm(R.w)} × ${cm(R.d)} × ${cm(R.h)} см`, 24, 180);
     x.font = 'italic 22px "PT Serif", Georgia, serif'; x.fillStyle = '#5a5147'; x.textAlign = 'left';
-    ['Точки — углы, чёрточки — рёбра,', 'синие плашки — грани стен, пола и потолка.', 'Грани остаются плоскими.', '', 'Нажмите на элемент — появятся стрелки,', 'тяните за стрелку: он двигается по этой оси.', 'Плашку грани можно тянуть сразу.', '', 'Нажмите на ребро в любом другом месте —', 'красная линия покажет излом, нажатие поставит.', '', 'Жёлтое солнце — направление света.']
+    ['Точки — углы, чёрточки — рёбра,', 'синие плашки — грани. Грани остаются плоскими.', '', 'Нажмите на элемент — появятся стрелки', 'только тех осей, по которым он двигается.', '', 'Разрез грани: нажмите на ребро,', 'затем на другое ребро той же грани —', 'красная линия покажет разрез.', '', 'Жёлтое солнце — направление света.']
       .forEach((t, i) => x.fillText(t, 24, 236 + i * 36));
   } else {
   let chx = 20, chy = 116;
@@ -1972,8 +1989,8 @@ function xrSelectStart(c, R) {
   if (tool === 'erase') { doErase(eraseTarget()); return; }
   if (tool === 'act') { const pk = pickItem(); if (pk) tapPart(pk); return; }
   const d = beginDrag(localRay(R), false);
-  if (d) { d.t0 = performance.now(); c.userData.grab = d; showCut(null); return; }
-  if (tool === 'room') { const ct = findCut(); if (ct) doCut(ct); else if (roomSel) { roomSel = null; updateGizmo(); } return; }
+  if (d) { d.t0 = performance.now(); c.userData.grab = d; cancelCut(); return; }
+  if (tool === 'room') { tapCut(); return; }
   const pk = pickItem();
   select(pk ? pk.id : null);
 }
