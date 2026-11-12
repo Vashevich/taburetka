@@ -7,7 +7,8 @@ export const EDGE = new THREE.LineBasicMaterial({ color: 0x1d1d1d });
 const noRay = () => {};
 
 function std(color, extra = {}) {
-  return new THREE.MeshStandardMaterial({ color, roughness: 0.88, metalness: 0, ...extra });
+  // грани чуть отодвинуты в глубину, чтобы линии рёбер не тонули в стене и в соседних деталях
+  return new THREE.MeshStandardMaterial({ color, roughness: 0.88, metalness: 0, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1, ...extra });
 }
 
 function addEdges(mesh, angle = 25) {
@@ -15,6 +16,56 @@ function addEdges(mesh, angle = 25) {
   e.raycast = noRay;
   e.userData.edge = true;
   mesh.add(e);
+}
+
+// Швы в одной плоскости не рисуем: если две коробки одной группы стоят вплотную и их грани продолжают друг друга,
+// линия между ними убирается. Линии на перепадах, во внутренних углах и на зазорах остаются.
+function cleanSeams(group) {
+  const boxes = [];
+  for (const m of group.children) {
+    if (!m.isMesh || m.geometry.type !== 'BoxGeometry') continue;
+    const s = m.scale, q = m.quaternion, g = m.geometry.parameters;
+    if (Math.abs(q.w) < 0.9999 || Math.min(s.x, s.y, s.z) <= 0) continue;
+    const hs = [g.width * s.x / 2, g.height * s.y / 2, g.depth * s.z / 2], c = m.position.toArray();
+    boxes.push({ m, s: s.toArray(), c, lo: c.map((v, i) => v - hs[i]), hi: c.map((v, i) => v + hs[i]) });
+  }
+  if (boxes.length > 1) {
+    const E = 0.0008, inside = (B, b, vb, c, vc) => vb > B.lo[b] && vb < B.hi[b] && vc > B.lo[c] && vc < B.hi[c];
+    for (const A of boxes) {
+      const pos = [];
+      let cut = false;
+      for (let a = 0; a < 3; a++) {
+        const b = (a + 1) % 3, c = (a + 2) % 3;
+        for (const sb of [-1, 1]) for (const sc of [-1, 1]) {
+          const pb = sb > 0 ? A.hi[b] : A.lo[b], pc = sc > 0 ? A.hi[c] : A.lo[c];
+          let segs = [[A.lo[a], A.hi[a]]];
+          for (const B of boxes) {
+            if (B === A || B.hi[a] <= A.lo[a] || B.lo[a] >= A.hi[a]) continue;
+            if (inside(B, b, pb + sb * E, c, pc + sc * E)) continue;          // перепад или внутренний угол — линия нужна
+            if (!inside(B, b, pb - sb * E, c, pc + sc * E) && !inside(B, b, pb + sb * E, c, pc - sc * E)) continue;
+            const next = [];
+            for (const [u, v] of segs) {
+              if (B.lo[a] - E > u) next.push([u, Math.min(v, B.lo[a])]);
+              if (B.hi[a] + E < v) next.push([Math.max(u, B.hi[a]), v]);
+            }
+            segs = next.filter(([u, v]) => v - u > 0.001);
+            cut = true;
+          }
+          for (const [u, v] of segs) for (const t of [u, v]) {
+            const P = [0, 0, 0];
+            P[a] = (t - A.c[a]) / A.s[a]; P[b] = (pb - A.c[b]) / A.s[b]; P[c] = (pc - A.c[c]) / A.s[c];
+            pos.push(...P);
+          }
+        }
+      }
+      if (!cut) continue;
+      const e = A.m.children.find((o) => o.userData.edge);
+      if (!e) continue;
+      e.geometry.dispose();
+      e.geometry = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    }
+  }
+  for (const m of group.children) if (m.isGroup) cleanSeams(m);
 }
 
 class Builder {
@@ -395,6 +446,7 @@ for (const d of CATALOG) d.cat = Object.keys(CAT_OF).find((k) => CAT_OF[k].inclu
 export function fillBlank(group, type, w, d, h, color, open, pose) {
   const b = new Builder(group, color || '#f1eee8');
   (BUILD[type] || BUILD.box)(b, w, d, h, { pose });
+  cleanSeams(group);
   for (const c of group.children)
     if (c.userData.act) applyAct(c, open && open.includes(c.userData.part) ? 1 : 0);
   return group;

@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=34';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=36';
 
 const STORE = 'taburetka.project.v1';
 
@@ -358,10 +358,10 @@ function buildRoom() {
     g.computeVertexNormals();
     return g;
   };
-  floorMesh = new THREE.Mesh(geo(fpos, fcol), new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.95 }));
+  floorMesh = new THREE.Mesh(geo(fpos, fcol), new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 }));
   floorMesh.userData.tri = ftri;
   floorMesh.receiveShadow = true;
-  wallMesh = new THREE.Mesh(geo(spos, scol), new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 1 }));
+  wallMesh = new THREE.Mesh(geo(spos, scol), new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 1, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 }));
   wallMesh.userData.tri = stri;
   wallMesh.receiveShadow = true;
   const epos = [];                      // все рёбра граней, включая линии разреза на ровной поверхности
@@ -762,9 +762,41 @@ function setView(v) {
   $('#btn3d').classList.toggle('on', v === '3d');
   $('#btnPlan').classList.toggle('on', v === 'plan');
 }
+// Мягкое затенение в углах и под мебелью (на экране; в шлеме сцена рисуется напрямую).
+let post = null;
+async function initPost() {
+  if (coarse) return;                   // на телефоне бережём скорость
+  try {
+    const base = 'three/addons/postprocessing/';
+    const [{ EffectComposer }, { RenderPass }, { GTAOPass }, { OutputPass }] = await Promise.all([
+      import(base + 'EffectComposer.js'), import(base + 'RenderPass.js'), import(base + 'GTAOPass.js'), import(base + 'OutputPass.js')]);
+    class SoftAO extends GTAOPass {     // ручки, размеры и подложка в затенении не участвуют
+      overrideVisibility() {
+        super.overrideVisibility();
+        for (const o of [gizmo, dimsG, tmpG, ground, snapMarker, eraseBox, cutMarker, cutMarkerA, cutLine]) o.visible = false;
+      }
+    }
+    const sz = renderer.getDrawingBufferSize(new THREE.Vector2());
+    const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(sz.x, sz.y, { samples: 4, type: THREE.HalfFloatType }));
+    const rp = new RenderPass(scene, camera);
+    composer.addPass(rp);
+    const ao = [camera, ortho].map((c) => {
+      const p = new SoftAO(scene, c, sz.x, sz.y);
+      p.blendIntensity = 0.75;
+      p.updateGtaoMaterial({ radius: 0.32, distanceExponent: 1.4, thickness: 1.2, scale: 1, samples: 16, distanceFallOff: 1, screenSpaceRadius: false });
+      p.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 8, radiusExponent: 2, rings: 2, samples: 16 });
+      composer.addPass(p);
+      return p;
+    });
+    composer.addPass(new OutputPass());
+    composer.setSize(innerWidth, innerHeight);
+    post = { composer, render(c) { rp.camera = c; ao[0].enabled = c === camera; ao[1].enabled = c === ortho; composer.render(); } };
+  } catch (e) { console.warn('Затенение недоступно', e); post = null; }
+}
 function resize() {
   if (renderer.xr.isPresenting) return;
   renderer.setSize(innerWidth, innerHeight, false);
+  if (post) post.composer.setSize(innerWidth, innerHeight);
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   fitOrtho();
@@ -905,44 +937,41 @@ function updateGizmo() {
   box.position.y = it.h / 2;
   box.renderOrder = 10;
   gizmo.add(box);
-  if (tool === 'pull' && !it.lock) {
-    for (const [axis, sign, x, y, z] of [['x', 1, it.w / 2, it.h / 2, 0], ['x', -1, -it.w / 2, it.h / 2, 0],
-      ['z', 1, 0, it.h / 2, it.d / 2], ['z', -1, 0, it.h / 2, -it.d / 2], ['y', 1, 0, it.h, 0]]) {
-      // двусторонняя стрелка вдоль оси: видно, куда тянуть
-      const mat = new THREE.MeshBasicMaterial({ color: HCOL[axis], depthTest: false, transparent: true });
-      const hm = new THREE.Group();
-      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 2.2, 10), mat);
-      const tipA = new THREE.Mesh(new THREE.ConeGeometry(0.85, 1.5, 14).translate(0, 1.85, 0), mat);
-      const tipB = new THREE.Mesh(new THREE.ConeGeometry(0.85, 1.5, 14).rotateX(Math.PI).translate(0, -1.85, 0), mat);
-      for (const q of [shaft, tipA, tipB]) { q.renderOrder = 11; hm.add(q); }
-      if (axis === 'x') hm.rotation.z = Math.PI / 2; else if (axis === 'z') hm.rotation.x = Math.PI / 2;
-      hm.position.set(x, y, z);
-      hm.userData = { axis, sign, cs: coarse ? 0.016 : 0.01, mat, col: HCOL[axis], pr: 2 };
-      gizmo.add(hm);
-      handles.push(hm);
-    }
+  if (tool === 'select' && !it.lock) addGumball(it);
+}
+// Гамбол, как в Rhino: в одном месте стрелки перемещения, кубики растяжения и дуга поворота.
+// Оси — самого предмета; всё постоянного размера на экране.
+function addGumball(it) {
+  const hold = new THREE.Group();
+  hold.position.y = it.h / 2;
+  gizmo.add(hold);
+  const part = (col, rx, rz) => {
+    const a = new THREE.Group(), m = new THREE.MeshBasicMaterial({ color: col, depthTest: false, transparent: true });
+    a.rotation.set(rx, 0, rz);
+    a.userData = { mat: m, col };
+    hold.add(a);
+    arrows.push(a);
+    return a;
+  };
+  const put = (a, geo, ro = 12) => { const q = new THREE.Mesh(geo, a.userData.mat); q.renderOrder = ro; a.add(q); };
+  const grip = (a, pos, data) => { const pk = new THREE.Object3D(); pk.position.set(...pos); pk.userData = { ...data, arrow: a }; a.add(pk); handles.push(pk); };
+  for (const [axis, rx, rz] of [['x', 0, -Math.PI / 2], ['y', 0, 0], ['z', Math.PI / 2, 0]]) {
+    const ar = part(HCOL[axis], rx, rz);                    // стрелка: перемещение вдоль оси
+    put(ar, new THREE.CylinderGeometry(0.018, 0.018, 1, 8).translate(0, 0.5, 0));
+    put(ar, new THREE.ConeGeometry(0.07, 0.22, 16).translate(0, 1.1, 0));
+    for (const t of [0.45, 0.8, 1.1]) grip(ar, [0, t, 0], { kind: 'move', axis });
+    const sc = part(HCOL[axis], rx, rz);                    // кубик за стрелкой: тянуть эту сторону
+    put(sc, new THREE.BoxGeometry(0.13, 0.13, 0.13).translate(0, 1.5, 0), 13);
+    grip(sc, [0, 1.5, 0], { kind: 'scale', axis, sign: 1 });
+    if (axis === 'y') continue;
+    const sb = part(HCOL[axis], rx, rz);                    // кубик с обратной стороны: тянуть противоположную грань
+    put(sb, new THREE.CylinderGeometry(0.012, 0.012, 0.6, 6).translate(0, -0.3, 0));
+    put(sb, new THREE.BoxGeometry(0.13, 0.13, 0.13).translate(0, -0.62, 0), 13);
+    grip(sb, [0, -0.62, 0], { kind: 'scale', axis, sign: -1 });
   }
-  if (tool === 'move3d' && !it.lock) {
-    const hold = new THREE.Group();     // оси комнаты, а не предмета
-    hold.position.y = it.h / 2;
-    hold.rotation.y = -it.rot;
-    gizmo.add(hold);
-    addArrows(hold, ['x', 'y', 'z']);
-  }
-  if (tool === 'rotate' && !it.lock) {
-    const r = ringR(it);
-    const ring = new THREE.Mesh(new THREE.RingGeometry(r - 0.015, r + 0.015, 64),
-      new THREE.MeshBasicMaterial({ color: 0x1f6feb, side: THREE.DoubleSide, depthTest: false, transparent: true, opacity: 0.85 }));
-    ring.rotation.x = -Math.PI / 2;
-    ring.position.y = 0.01;
-    ring.renderOrder = 10;
-    const tick = new THREE.Mesh(new THREE.CircleGeometry(0.05, 20),
-      new THREE.MeshBasicMaterial({ color: 0x1f6feb, side: THREE.DoubleSide, depthTest: false, transparent: true }));
-    tick.rotation.x = -Math.PI / 2;
-    tick.position.set(0, 0.012, r);
-    tick.renderOrder = 11;
-    gizmo.add(ring, tick);
-  }
+  const arc = part(HCOL.y, 0, 0);                           // дуга между красной и зелёной стрелкой: поворот
+  put(arc, new THREE.TorusGeometry(0.72, 0.02, 8, 28, Math.PI / 2).rotateX(Math.PI / 2));
+  for (const a of [22, 34, 45, 56, 68]) { const r = THREE.MathUtils.degToRad(a); grip(arc, [0.72 * Math.cos(r), 0, 0.72 * Math.sin(r)], { kind: 'rot' }); }
 }
 // высота видимой области (в единицах world) на расстоянии объекта — для элементов постоянного экранного размера
 function viewHeightAt(obj) {
@@ -1233,30 +1262,29 @@ function beginDrag(lr, direct) {
     return { mode: 'room', kind: 'none', sel: el, direct: true };
   }
   const it = sel();
-  if (it && !it.lock && (tool === 'pull' || tool === 'move3d')) {
-    const h = pickHandle();
-    if (h && tool === 'pull')
-      return { mode: 'pull', riders: ridersOf(it), id: it.id, axis: h.userData.axis, sign: h.userData.sign, rot: it.rot,
+  if (it && !it.lock && tool === 'select') {   // гамбол: стрелка, кубик или дуга
+    const h = pickHandle(), u = h && h.userData;
+    if (u && u.kind === 'scale')
+      return { mode: 'pull', riders: ridersOf(it), id: it.id, axis: u.axis, sign: u.sign, rot: it.rot,
         w0: it.w, d0: it.d, h0: it.h, x0: it.x, z0: it.z, hy: it.y + it.h / 2 };
-    if (h) {
-      const a0 = new THREE.Vector3(it.x, it.y + it.h / 2, it.z);
-      return { mode: 'axis', id: it.id, axis: h.userData.axis, a0, s0: axisParam(lr, a0, AXES[h.userData.axis]),
-        x0: it.x, y0: it.y, z0: it.z };
+    if (u && u.kind === 'move') {
+      const a0 = new THREE.Vector3(it.x, it.y + it.h / 2, it.z), c = Math.cos(it.rot), sn = Math.sin(it.rot);
+      const dir = u.axis === 'x' ? new THREE.Vector3(c, 0, -sn) : u.axis === 'z' ? new THREE.Vector3(sn, 0, c) : AXES.y.clone();
+      return { mode: 'axis', id: it.id, axis: u.axis, dir, a0, s0: axisParam(lr, a0, dir), x0: it.x, y0: it.y, z0: it.z };
+    }
+    if (u && u.kind === 'rot') {
+      const py = it.y + it.h / 2, p = hitPlaneY(lr, py);
+      if (p) return { mode: 'rotate', id: it.id, py, a0: Math.atan2(p.x - it.x, p.z - it.z), rot0: it.rot };
     }
   }
   const pk = pickItem();
-  if (it && tool === 'rotate' && !it.lock) {
-    const p = hitPlaneY(lr, it.y);
-    if (p && ((pk && pk.id === it.id) || Math.hypot(p.x - it.x, p.z - it.z) < ringR(it) * 1.3))
-      return { mode: 'rotate', id: it.id, a0: Math.atan2(p.x - it.x, p.z - it.z), rot0: it.rot };
-  }
   if (pk && (direct || pk.id === selId)) {
     if (pk.id !== selId) select(pk.id);
     const t = item(pk.id);
     if (t.lock) return null;
     world.updateMatrixWorld(true);
     const pl = world.worldToLocal(pk.point.clone());
-    return { mode: 'move', ...makeGrab(t, pl, tool === 'move3d'), pk };
+    return { mode: 'move', ...makeGrab(t, pl, false), pk };
   }
   return null;
 }
@@ -1356,12 +1384,11 @@ function updateDrag(d, lr) {
     placeItem(it);
     gizmo.position.set(it.x, it.y, it.z);
   } else if (d.mode === 'axis') {
-    const sp = axisParam(lr, d.a0, AXES[d.axis]);
+    const sp = axisParam(lr, d.a0, d.dir);
     if (sp === null) return false;
     if (d.s0 === null) { d.s0 = sp; return false; }
     const dl = sp - d.s0, st = state.snap, sn = (v) => (st > 0 ? Math.round(v / st) * st : v);
-    if (d.axis === 'x') it.x = r3(sn(d.x0 + dl));
-    else if (d.axis === 'z') it.z = r3(sn(d.z0 + dl));
+    if (d.axis !== 'y') { const m = sn(dl); it.x = r3(d.x0 + d.dir.x * m); it.z = r3(d.z0 + d.dir.z * m); }   // вдоль оси самого предмета
     else {
       let y = sn(d.y0 + dl);
       const H = ceilMin(it, it.x, it.z);
@@ -1372,7 +1399,7 @@ function updateDrag(d, lr) {
     placeItem(it);
     gizmo.position.set(it.x, it.y, it.z);
   } else if (d.mode === 'rotate') {
-    const p = hitPlaneY(lr, it.y);
+    const p = hitPlaneY(lr, d.py ?? it.y);
     if (!p) return false;
     it.rot = snapRot(d.rot0 + Math.atan2(p.x - it.x, p.z - it.z) - d.a0);
     placeItem(it);
@@ -1445,7 +1472,7 @@ function onMove(e) {
     if (updateDrag(drag, localRay(ray.ray))) updateStatus();
     return;
   }
-  if ((tool === 'pull' || tool === 'move3d' || tool === 'room') && e.pointerType === 'mouse' && !down) {
+  if ((tool === 'select' || tool === 'room') && e.pointerType === 'mouse' && !down) {
     setRay(e);
     const hh = pickHandle();
     setHot(hh);
@@ -1530,13 +1557,10 @@ canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // ───────────────────────── интерфейс ─────────────────────────
 const HINTS = {
-  select: 'Тащите предмет: он всегда примагничен — к полу, к другой мебели, к стене или потолку. Поднять в воздух — инструмент «По осям»',
+  select: 'Тащите предмет: он всегда примагничен — к полу, к другой мебели, к стене или потолку. У выбранного: стрелки — по осям, кубики — тянуть, дуга — поворот',
   room: 'Комната: нажмите на точку, ребро или плашку грани — появятся стрелки. Разрез грани: нажмите на ребро, затем на другое ребро той же грани. Солнце — направление света',
   erase: 'Ластик: наведите на предмет или размер — он станет красным — и нажмите, чтобы удалить',
   act: 'Нажимайте на дверцы и ящики — они открываются; по человечку — он садится или встаёт',
-  move3d: 'Тащите стрелку: красная и зелёная — вдоль пола, синяя — вверх-вниз',
-  rotate: 'Выберите предмет и тащите вокруг него — поворот с шагом 15°',
-  pull: 'Выберите предмет и тащите двусторонние стрелки на его гранях',
   measure: 'Рулетка: укажите первую точку — липнет к углам',
 };
 function updateStatus() {
@@ -1815,13 +1839,10 @@ addEventListener('keydown', (e) => {
   if (mod) return;
   const it = sel();
   if (k === 'v' || k === 'м') setTool('select');
-  else if (k === 'm' || k === 'ь') setTool('move3d');
   else if (k === 'i' || k === 'ш') setTool('act');
   else if (k === 'x' || k === 'ч') setTool('erase');
   else if (k === 'c' || k === 'с') setTool('room');
   else if (k === 'g' || k === 'п') { state.grid = state.grid === false; updateXRVis(); commit(); }
-  else if (k === 'r' || k === 'к') setTool('rotate');
-  else if (k === 'p' || k === 'з') setTool('pull');
   else if (k === 't' || k === 'е') setTool('measure');
   else if (k === 'a' || k === 'ф') toggleCatalog();
   else if (k === 'escape') { if (cutA) { cancelCut(); updateStatus(); } else if (measureA) setTool('measure'); else if (!catalogEl.hidden) toggleCatalog(false); else select(null); }
@@ -1855,9 +1876,6 @@ scene.add(tpMarker);
 // ── VR-меню на левом контроллере: тот же каталог и те же инструменты, что на экране ──
 const TOOLS = [
   ['select', 'Выбор', 'M5 3l14 8-6 2-2 6z'],
-  ['move3d', 'По осям', 'M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3'],
-  ['rotate', 'Поворот', 'M20 12a8 8 0 1 1-3-6.2M20 3v5h-5'],
-  ['pull', 'Тянуть', 'M4 14h10v6H4zM9 14V4M5 8l4-4 4 4'],
   ['measure', 'Рулетка', 'M3 16L16 3l5 5L8 21zM7 12l2 2M10 9l2 2M13 6l2 2'],
   ['erase', 'Ластик', 'M8 21h12M5.6 14.4l8-8a2 2 0 0 1 2.8 0l3.2 3.2a2 2 0 0 1 0 2.8L12 20H8.5l-2.9-2.8a2 2 0 0 1 0-2.8zM10 10l6 6'],
   ['act', 'Действие', 'M9 12V5a1.5 1.5 0 0 1 3 0v5.5m0-1a1.5 1.5 0 0 1 3 0V11m0-.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-1a6 6 0 0 1-5-2.6L4.6 15a1.5 1.5 0 0 1 2.5-1.7L9 15.5'],
@@ -2510,7 +2528,9 @@ function boot() {
     else ctl().update();
     if (anims.length) runAnims(dt);
     updateConstSize();
-    renderer.render(scene, renderer.xr.isPresenting ? camera : cam());
+    if (renderer.xr.isPresenting || !post) renderer.render(scene, renderer.xr.isPresenting ? camera : cam());
+    else { try { post.render(cam()); } catch (e) { console.warn('Затенение отключено', e); post = null; } }
   });
+  initPost();
 }
 boot();
