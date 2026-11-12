@@ -162,6 +162,7 @@ export function applyAct(part, t) {
   part.userData.t = t;
   if (a.kind === 'door') part.rotation.y = a.sign * t * (a.ang || 1.9);
   else if (a.kind === 'turn') part.rotation[a.axis] = a.sign * t * a.ang;      // откидные части: крышки, спинки, столешницы
+  else if (a.kind === 'stretch') part.scale.z = 1 + t * (a.k - 1);              // выдвижное спальное место
   else if (a.kind === 'slide') part.position.x = a.x0 + t * a.travel;          // сдвижные полотна
   else part.position.z = a.z0 + t * a.travel;
 }
@@ -174,16 +175,19 @@ function carcass(b, w, h, D, zc, t, bot) {
   b.box(w - 2 * t, h - t - bot, 0.008, 0, bot, zc - D / 2 + 0.004, b.m2);
 }
 
-function sofa(b, w, d, h) {
+function sofa(b, w, d, h) {            // диван и кресло: сиденье выдвигается вперёд, вся глубина становится около 2 м
   const baseH = Math.max(0.1, Math.min(0.3, h * 0.36));
   const armW = Math.min(0.18, w * 0.16), backD = Math.min(0.22, d * 0.26);
   const armH = Math.max(0.05, Math.min(h - baseH - 0.12, 0.3));
   b.box(w, baseH, d, 0, 0, 0, b.m2);
   b.box(w, h - baseH, backD, 0, baseH, -d / 2 + backD / 2);
   for (const s of [-1, 1]) b.box(armW, armH, d - backD, s * (w / 2 - armW / 2), baseH, backD / 2);
-  const inner = w - 2 * armW, n = Math.max(1, Math.round(inner / 0.7)), cw = inner / n;
-  for (let i = 0; i < n; i++)
-    b.box(cw - 0.012, 0.12, d - backD - 0.02, -inner / 2 + cw * (i + 0.5), baseH, backD / 2 - 0.01, b.m3);
+  const inner = w - 2 * armW, n = Math.max(1, Math.round(inner / 0.7)), cw = inner / n, sd = d - backD;
+  b.part(0, 0, -d / 2 + backD, { kind: 'stretch', k: Math.max(1.2, (2 - backD) / sd) }, () => {
+    b.box(inner - 0.03, baseH - 0.05, sd + 0.004, 0, 0.03, (sd + 0.004) / 2, b.m2);
+    for (let i = 0; i < n; i++)
+      b.box(cw - 0.012, 0.12, sd - 0.02, -inner / 2 + cw * (i + 0.5), baseH, (sd - 0.02) / 2, b.m3);
+  });
 }
 
 const glassM = () => std('#bfe3f2', { transparent: true, opacity: 0.35, roughness: 0.1 });
@@ -458,6 +462,26 @@ const BUILD = {
     geo.translate(0, 0, -d / 2);
     b.finish(new THREE.Mesh(geo, b.m));
   },
+  bed1(b, w, d, h) { BUILD.bed(b, w, d, h); },
+  bunk(b, w, d, h) {                     // двухъярусная кровать с лестницей
+    const p = 0.06, white = std('#f4f1ea');
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) b.box(p, h, p, sx * (w / 2 - p / 2), 0, sz * (d / 2 - p / 2), b.m2);
+    for (const y of [0.25, h * 0.62]) {
+      b.box(w - 2 * p, 0.12, d - 2 * p, 0, y, 0);
+      b.box(w - 2 * p - 0.04, 0.14, d - 2 * p - 0.04, 0, y + 0.12, 0, white);
+      b.box(w * 0.6, 0.08, 0.34, 0, y + 0.26, -d / 2 + p + 0.24, b.m3);
+      for (const sz of [-1, 1]) b.box(w - 2 * p, 0.04, 0.03, 0, y + 0.42, sz * (d / 2 - p / 2));
+    }
+    b.box(0.03, 0.04, d - 2 * p, -w / 2 + 0.03, h * 0.62 + 0.42, 0);
+    for (const sz of [0.12, 0.5]) b.box(0.03, h * 0.62 + 0.3, 0.03, w / 2 + 0.015, 0, d / 2 - sz, b.m2);
+    for (let i = 1; i <= 4; i++) b.box(0.03, 0.03, 0.38, w / 2 + 0.015, i * (h * 0.62) / 4.4, d / 2 - 0.31, b.m2);
+  },
+  lowshelf(b, w, d, h) { BUILD.shelf(b, w, d, h); },
+  lowwall(b, w, d, h) { b.box(w, h, d); },
+  column(b, w, d, h) {
+    b.box(w, 0.12, d, 0, 0, 0); b.box(w, 0.1, d, 0, h - 0.1, 0);
+    b.cyl(0.5, 0.5, h - 0.22, 0, 0.12, 0, b.m, w * 0.8, d * 0.8);
+  },
   // ── раскладная мебель ──
   sofabed(b, w, d, h) {                  // сиденье выезжает вперёд, спинка-подушка откидывается на его место
     const baseH = Math.min(0.3, h * 0.36), armW = Math.min(0.16, w * 0.12), bk = 0.08, ct = 0.16;
@@ -713,7 +737,7 @@ export const CATALOG = [
   { type: 'pouf', name: 'Пуф', w: 0.5, d: 0.5, h: 0.42, color: '#b5553c' },
   { type: 'bench', name: 'Скамья', w: 1.2, d: 0.38, h: 0.45, color: '#c8a27a' },
   { type: 'barstool', name: 'Барный стул', w: 0.38, d: 0.38, h: 0.75, color: '#c8a27a' },
-  { type: 'bed', name: 'Кровать', w: 1.6, d: 2.1, h: 0.9, color: '#b9a48c' },
+  { type: 'bed', name: 'Кровать двуспальная', w: 1.6, d: 2.1, h: 0.9, color: '#b9a48c' },
   { type: 'table', name: 'Стол', w: 1.4, d: 0.8, h: 0.75, color: '#c8a27a' },
   { type: 'coffeetable', name: 'Журнальный столик', w: 1.0, d: 0.6, h: 0.42, color: '#c8a27a' },
   { type: 'roundtable', name: 'Круглый стол', w: 0.9, d: 0.9, h: 0.75, color: '#c8a27a' },
@@ -736,7 +760,11 @@ export const CATALOG = [
   { type: 'wall', name: 'Перегородка', w: 2.0, d: 0.1, h: 2.7, color: '#f2efe9' },
   { type: 'door', name: 'Дверь', w: 0.9, d: 0.1, h: 2.05, color: '#d9c7a8' },
   { type: 'window', name: 'Окно', w: 1.4, d: 0.1, h: 1.4, y: 0.85, color: '#f5f5f2' },
-  { type: 'sofabed', name: 'Диван-кровать', w: 2.0, d: 0.95, h: 0.85, color: '#8c9aa8' },
+  { type: 'bed1', name: 'Кровать односпальная', w: 0.9, d: 2.05, h: 0.85, color: '#b9a48c' },
+  { type: 'bunk', name: 'Двухъярусная кровать', w: 0.95, d: 2.05, h: 1.7, color: '#c8a27a' },
+  { type: 'lowshelf', name: 'Низкий стеллаж', w: 1.2, d: 0.32, h: 0.85, color: '#c8a27a' },
+  { type: 'lowwall', name: 'Полустенка', w: 1.5, d: 0.1, h: 1.1, color: '#f2efe9' },
+  { type: 'column', name: 'Колонна', w: 0.35, d: 0.35, h: 2.7, color: '#f2efe9' },
   { type: 'recliner', name: 'Кресло-реклайнер', w: 0.85, d: 0.95, h: 1.0, color: '#7a6a5a' },
   { type: 'officechair', name: 'Офисное кресло', w: 0.6, d: 0.6, h: 1.1, color: '#3a3f47' },
   { type: 'booktable', name: 'Стол-книжка', w: 0.4, d: 0.8, h: 0.75, color: '#c8a27a' },
@@ -768,19 +796,24 @@ export const CATALOG = [
   { type: 'human', name: 'Человек', w: 0.5, d: 0.3, h: 1.75, color: '#e6cfa3' },
 ];
 
-export const CATS = [['all', 'Всё'], ['seat', 'Сиденья и кровати'], ['table', 'Столы'], ['store', 'Шкафы и полки'],
-  ['tech', 'Техника и сантехника'], ['room', 'Окна, двери, перегородки'], ['decor', 'Декор']];
+export const CATS = [['all', 'Всё'], ['seat', 'Стулья'], ['table', 'Столы'], ['bed', 'Кровати'], ['store', 'Шкафы'], ['shelf', 'Полки'],
+  ['tech', 'Техника'], ['plumb', 'Сантехника'], ['wall', 'Перегородки'], ['window', 'Окна'], ['door', 'Двери'], ['decor', 'Декор']];
 const CAT_OF = {
-  seat: ['stool', 'chair', 'armchair', 'recliner', 'officechair', 'sofa', 'sofabed', 'cornersofa', 'pouf', 'bench', 'barstool', 'bed'],
+  seat: ['stool', 'chair', 'barstool', 'officechair', 'bench', 'pouf', 'armchair', 'recliner', 'sofa', 'cornersofa'],
   table: ['table', 'exttable', 'booktable', 'coffeetable', 'roundtable', 'desk'],
-  store: ['wardrobe', 'dresser', 'nightstand', 'sideboard', 'tvstand', 'chest', 'shelf', 'wallshelf', 'wallcabinet', 'kitchen', 'box'],
-  tech: ['fridge', 'stove', 'washer', 'sink', 'bathtub', 'shower', 'toilet', 'tv', 'lamp'],
-  room: ['wall', 'door', 'door2', 'slidedoor', 'balcony', 'opening', 'arch', 'window', 'window1', 'window3', 'panorama', 'roundwindow'],
+  bed: ['bed', 'bed1', 'bunk'],
+  store: ['wardrobe', 'dresser', 'nightstand', 'sideboard', 'tvstand', 'chest', 'kitchen', 'wallcabinet', 'box'],
+  shelf: ['shelf', 'lowshelf', 'wallshelf'],
+  tech: ['fridge', 'stove', 'washer', 'tv', 'lamp'],
+  plumb: ['sink', 'bathtub', 'shower', 'toilet'],
+  wall: ['wall', 'lowwall', 'column', 'opening', 'arch'],
+  window: ['window', 'window1', 'window3', 'panorama', 'roundwindow'],
+  door: ['door', 'door2', 'slidedoor', 'balcony'],
   decor: ['plant', 'ficus', 'palm', 'sansev', 'cactus', 'flowers', 'rug', 'roundrug', 'picture', 'mirror', 'human'],
 };
 // На эти предметы ничего не ставится; ковры лежат только на полу.
 export const NOSUP_T = ['door2', 'slidedoor', 'balcony', 'opening', 'arch', 'window1', 'window3', 'panorama', 'roundwindow',
-  'ficus', 'palm', 'sansev', 'cactus', 'flowers', 'mirror', 'shower', 'officechair'];
+  'ficus', 'palm', 'sansev', 'cactus', 'flowers', 'mirror', 'shower', 'officechair', 'lowwall', 'column', 'bunk'];
 export const RUGS = new Set(['rug', 'roundrug']);
 CATALOG.sort((a, b) => { const o = Object.values(CAT_OF).flat(); return o.indexOf(a.type) - o.indexOf(b.type); });
 for (const d of CATALOG) d.cat = Object.keys(CAT_OF).find((k) => CAT_OF[k].includes(d.type)) || 'decor';

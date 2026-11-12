@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS } from './furniture.js?v=49';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS } from './furniture.js?v=50';
 
 const STORE = 'taburetka.project.v1';
 
@@ -620,14 +620,23 @@ function dragMoveCore(it, g, lr) {
   // нижний щуп: луч, опущенный на высоту захвата, ищет опору — пол или верх мебели
   let h = castScene(lr.o.clone().setY(lr.o.y - g.rel), lr.d, it);
   if (!h || h.n.y <= 0.6) h = castScene(lr.o, lr.d, it) || h;   // иначе смотрим, во что упирается сам курсор
-  if (!h) return false;
+  if (!h) {                             // мимо комнаты: предмет встаёт на землю снаружи
+    const p = hitPlaneY({ o: lr.o.clone().setY(lr.o.y - g.rel), d: lr.d }, 0);
+    if (!p) return false;
+    h = { p, n: new THREE.Vector3(0, 1, 0), room: true, ground: true };
+  }
   if (h.n.y > 0.6) {                    // опора под предметом
     x = h.p.x + g.off.x; z = h.p.z + g.off.z; y = h.p.y;
     if (h.room && st > 0) {             // на полу действуют сетка, края соседей и стены
       const f = footprint(it);
       [x, z] = snapPos(it, x, z);
-      if (R.w >= 2 * f.hx) x = clamp(x, -R.w / 2 + f.hx, R.w / 2 - f.hx);
-      if (R.d >= 2 * f.hz) z = clamp(z, -R.d / 2 + f.hz, R.d / 2 - f.hz);
+      if (h.ground) {                   // снаружи: вплотную к стене с другой стороны, внутрь не заходит
+        const px = R.w / 2 + f.hx - Math.abs(x), pz = R.d / 2 + f.hz - Math.abs(z);
+        if (px > 0 && pz > 0 && !R.blank) { if (px < pz) x = Math.sign(x || 1) * (R.w / 2 + f.hx); else z = Math.sign(z || 1) * (R.d / 2 + f.hz); }
+      } else {
+        if (R.w >= 2 * f.hx) x = clamp(x, -R.w / 2 + f.hx, R.w / 2 - f.hx);
+        if (R.d >= 2 * f.hz) z = clamp(z, -R.d / 2 + f.hz, R.d / 2 - f.hz);
+      }
       y = floorAt(x, z);
     }
   } else if (h.n.y < -0.6) {            // потолок: верхний щуп
@@ -1451,7 +1460,7 @@ function updateDrag(d, lr) {
   if (d.mode === 'move') {
     if (!dragMove(it, d, lr)) return false;
     placeItem(it);
-    gizmo.position.set(it.x, it.y, it.z);
+    if (tool !== 'room') gizmo.position.set(it.x, it.y, it.z);
   } else if (d.mode === 'axis') {
     const sp = axisParam(lr, d.a0, d.dir);
     if (sp === null) return false;
@@ -1472,13 +1481,13 @@ function updateDrag(d, lr) {
     }
     if (it.y > restY(it, it.x, it.z) + 0.02) it.hold = 'free'; else delete it.hold;   // по осям можно оставить в воздухе
     placeItem(it);
-    gizmo.position.set(it.x, it.y, it.z);
+    if (tool !== 'room') gizmo.position.set(it.x, it.y, it.z);
   } else if (d.mode === 'rotate') {
     const p = hitPlaneY(lr, d.py ?? it.y);
     if (!p) return false;
     it.rot = snapRot(d.rot0 + Math.atan2(p.x - it.x, p.z - it.z) - d.a0);
     placeItem(it);
-    gizmo.rotation.y = it.rot;
+    if (tool !== 'room') gizmo.rotation.y = it.rot;
   } else if (d.mode === 'pull') {
     if (!applyPull(it, d, lr)) return false;
     fillItem(it, objs.get(it.id));
