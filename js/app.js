@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=8';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=9';
 
 const STORE = 'taburetka.project.v1';
 
@@ -1703,15 +1703,12 @@ function sticks(dt) {
     const x = (Math.abs(ax[2] ?? 0) > Math.abs(ax[0] ?? 0) ? ax[2] : ax[0]) || 0;
     const y = (Math.abs(ax[3] ?? 0) > Math.abs(ax[1] ?? 0) ? ax[3] : ax[1]) || 0;
     if (hand === 'right') {
-      if (xr.env) {
-        if (Math.abs(x) > 0.6) {
-          if (!u.turned) {
-            u.turned = true;
-            const an = -Math.sign(x) * Math.PI / 6, h = camera.getWorldPosition(new THREE.Vector3());
-            rig.position.sub(h).applyAxisAngle(THREE.Object3D.DEFAULT_UP, an).add(h);
-            rig.rotation.y += an;
-          }
-        } else if (Math.abs(x) < 0.3) u.turned = false;
+      if (xr.env) {                     // плавный поворот себя вокруг своей головы
+        if (Math.abs(x) > 0.2) {
+          const an = -Math.sign(x) * ((Math.abs(x) - 0.2) / 0.8) * 1.6 * dt, h = camera.getWorldPosition(new THREE.Vector3());
+          rig.position.sub(h).applyAxisAngle(THREE.Object3D.DEFAULT_UP, an).add(h);
+          rig.rotation.y += an;
+        }
       } else if (Math.abs(x) > 0.35) world.rotation.y -= x * dt * 0.5;
     } else if (hand === 'left' && Math.hypot(x, y) > 0.25) {
       const f = camera.getWorldDirection(new THREE.Vector3());
