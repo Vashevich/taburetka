@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=24';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=25';
 
 const STORE = 'taburetka.project.v1';
 
@@ -70,7 +70,7 @@ function demo() {
   const pick = (t) => CATALOG.find((c) => c.type === t);
   const mk = (t, x, z, rot = 0) => {
     const c = pick(t);
-    return { id: uid(), type: t, name: c.name, w: c.w, d: c.d, h: c.h, x, z, y: c.y || 0, rot, color: c.color };
+    return { id: uid(), type: t, name: c.name, w: c.w, d: c.d, h: c.h, x, z, y: c.y || 0, rot, color: c.color, ...(c.y ? { hold: 'wall' } : {}) };
   };
   return {
     v: 1, room: { ...state.room }, snap: 0.05, dims: [],
@@ -396,12 +396,36 @@ function snapPos(it, x, z) {
 // ── «гравитация»: на что встанет предмет в точке (x, z) ──
 const NOSUP = new Set(['wall', 'door', 'window', 'human', 'plant', 'lamp', 'tv', 'picture']);
 const downRay = new THREE.Raycaster();
+// То, что стоит на предмете, едет вместе с ним и не считается ему опорой.
+let dragSkip = new Set();
+function ridersOf(base, seen = new Set([base.id])) {
+  const out = [], g = objs.get(base.id);
+  if (!g) return out;
+  const f = footprint(base);
+  for (const o of state.items) {
+    if (seen.has(o.id) || o.hold) continue;
+    if (Math.abs(o.x - base.x) > f.hx + 0.01 || Math.abs(o.z - base.z) > f.hz + 0.01 || o.y < base.y + 0.01) continue;
+    const top = topOf(g, o.x, o.z);
+    if (top === null || Math.abs(o.y - top) > 0.03) continue;
+    seen.add(o.id);
+    out.push(o, ...ridersOf(o, seen));
+  }
+  return out;
+}
+function settle(list) {                 // опустить на опору то, что осталось без неё
+  for (const o of [...list].sort((a, b) => a.y - b.y)) {
+    if (!item(o.id) || o.hold) continue;
+    o.y = restY(o, o.x, o.z);
+    placeItem(o);
+    refreshDims(o.id);
+  }
+}
 function restY(it, x, z) {
   const fl = floorAt(x, z);              // пол может быть неровным
   if (it.type === 'rug') return fl;
   const cands = [];
   for (const o of state.items) {
-    if (o.id === it.id || NOSUP.has(o.type)) continue;
+    if (o.id === it.id || NOSUP.has(o.type) || dragSkip.has(o.id)) continue;
     const f = footprint(o);
     if (Math.abs(x - o.x) > f.hx || Math.abs(z - o.z) > f.hz) continue;
     const g = objs.get(o.id);
@@ -433,7 +457,7 @@ function topOf(group, x, z) {            // высота верхней пове
 }
 function topUnder(it, lr) {             // на чью верхнюю грань смотрит курсор (сам предмет не в счёт)
   const cands = [];
-  for (const o of state.items) if (o.id !== it.id && !NOSUP.has(o.type)) { const g = objs.get(o.id); if (g) cands.push(g); }
+  for (const o of state.items) if (o.id !== it.id && !NOSUP.has(o.type) && !dragSkip.has(o.id)) { const g = objs.get(o.id); if (g) cands.push(g); }
   if (!cands.length) return null;
   world.updateMatrixWorld(true);
   downRay.set(lr.o.clone().applyMatrix4(world.matrixWorld), lr.d.clone().transformDirection(world.matrixWorld));
@@ -460,17 +484,34 @@ function roomExit(lr) {                 // точка, в которой луч 
 function makeGrab(it, pl, free = false) {   // pl — точка захвата в координатах world
   return { id: it.id, rel: pl.y - it.y, off: { x: it.x - pl.x, z: it.z - pl.z }, base: it.y, free,
     float: it.y > restY(it, it.x, it.z) + 0.02, changed: false, turned: false,
-    hang: it.y > restY(it, it.x, it.z) + 0.02 && it.y + it.h > ceilMin(it, it.x, it.z) - 0.03 };   // висит под потолком
+    hang: it.y > restY(it, it.x, it.z) + 0.02 && it.y + it.h > ceilMin(it, it.x, it.z) - 0.03,   // висит под потолком
+    riders: free ? [] : ridersOf(it).map((o) => ({ o, dx: o.x - it.x, dy: o.y - it.y, dz: o.z - it.z })) };
 }
 // Перетаскивание: предмет всегда к чему-то примагничен — к полу, к другому предмету, к стене или к потолку.
 // В воздухе он не остаётся: оторванный от стены падает на опору. Поднять в воздух можно только инструментом «По осям».
 function dragMove(it, g, lr) {
+  dragSkip = new Set((g.riders || []).map((r) => r.o.id));
+  const ok = dragMoveCore(it, g, lr);
+  dragSkip = new Set();
+  if (!ok) return false;
+  if (g.free) { if (it.y > restY(it, it.x, it.z) + 0.02) it.hold = 'free'; else delete it.hold; }
+  else if (g.float) it.hold = 'wall'; else delete it.hold;
+  for (const r of g.riders || []) { r.o.x = r3(it.x + r.dx); r.o.y = r3(it.y + r.dy); r.o.z = r3(it.z + r.dz); placeItem(r.o); refreshDims(r.o.id); }
+  return true;
+}
+function dragMoveCore(it, g, lr) {
   const R = state.room, snap = state.snap > 0;
+  if ((g.float || g.hang) && !g.free && snap) {   // висит на стене, а курсор уже на открытом полу — отцепляем, предмет встанет на опору
+    const pf = hitPlaneY(lr, 0), fp = footprint(it);
+    if (pf && Math.abs(pf.x) < R.w / 2 - fp.hx - 0.15 && Math.abs(pf.z) < R.d / 2 - fp.hz - 0.15) {
+      g.float = g.hang = false; g.rel = 0; g.off = { x: 0, z: 0 }; g.base = restY(it, pf.x, pf.z);
+    }
+  }
   if (g.free || !snap) {
     const p = hitPlaneY(lr, it.y + g.rel);
     if (!p) return false;
     [it.x, it.z] = snapPos(it, p.x + g.off.x, p.z + g.off.z);
-    if (!g.free) it.y = restY(it, it.x, it.z);
+    if (!g.free) { it.y = restY(it, it.x, it.z); g.float = false; }
     return true;
   }
   let x = 0, z = 0, p = null, ceil = false, stackY = null;
@@ -571,8 +612,18 @@ function addItemData(it) {
   }
   while (state.items.some((o) => Math.abs(o.x - x) < 0.03 && Math.abs(o.z - z) < 0.03)) { x += 0.2; z += 0.2; }
   it.x = r3(x); it.z = r3(z);
+  const R = state.room;
+  if (it.y > 0.02) {                    // настенный предмет сразу встаёт на ближайшую стену, лицом в комнату
+    const opts = [[Math.abs(z + R.d / 2), 0], [Math.abs(z - R.d / 2), Math.PI], [Math.abs(x + R.w / 2), Math.PI / 2], [Math.abs(x - R.w / 2), -Math.PI / 2]];
+    it.rot = opts.sort((p, q) => p[0] - q[0])[0][1];
+    const f = footprint(it);
+    if (it.rot === 0) it.z = r3(-R.d / 2 + f.hz); else if (it.rot === Math.PI) it.z = r3(R.d / 2 - f.hz);
+    else if (it.rot > 0) it.x = r3(-R.w / 2 + f.hx); else it.x = r3(R.w / 2 - f.hx);
+    it.hold = 'wall';
+  }
   state.items.push(it);
   makeItemObj(it);
+  if (!it.hold) { it.y = restY(it, it.x, it.z); placeItem(it); }   // остальное — на пол или на мебель под ним
   select(it.id);
   commit();
   return it;
@@ -582,11 +633,13 @@ function addBlank(def) {
     x: 0, z: 0, y: def.y || 0, rot: 0, color: def.color });
 }
 function removeItem(id) {
+  const gone = item(id), riders = gone ? ridersOf(gone) : [];
   for (const m of state.dims) for (const k of ['a', 'b'])   // размеры, привязанные к предмету, остаются на месте
     if (m[k + 'i']?.id === id) { m[k] = dimEnd(m, k).toArray().map(r3); delete m[k + 'i']; }
   const g = objs.get(id);
   if (g) { disposeChildren(g); itemsG.remove(g); objs.delete(id); }
   state.items = state.items.filter((i) => i.id !== id);
+  settle(riders);
   if (selId === id) select(null);
   commit();
 }
@@ -602,8 +655,9 @@ function duplicate(id) {
 function rotateSel(a) {
   const it = sel();
   if (!it || it.lock) return;
+  const riders = ridersOf(it);
   it.rot = snapRot(it.rot + a);
-  placeItem(it); updateGizmo(); updateProps(); refreshDims(it.id); commit();
+  placeItem(it); settle(riders); updateGizmo(); updateProps(); refreshDims(it.id); commit();
 }
 
 // ───────────────────────── камеры и вид ─────────────────────────
@@ -613,6 +667,7 @@ controls3d.maxPolarAngle = Math.PI / 2 - 0.02;
 controls3d.minDistance = 0.4;
 controls3d.maxDistance = 60;
 controls3d.zoomToCursor = true;
+controls3d.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };   // левая — сдвиг сцены, правая — поворот
 const controlsPlan = new OrbitControls(ortho, canvas);
 controlsPlan.enableRotate = false;
 controlsPlan.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
@@ -1087,7 +1142,7 @@ function beginDrag(lr, direct) {
   if (it && !it.lock && (tool === 'pull' || tool === 'move3d')) {
     const h = pickHandle();
     if (h && tool === 'pull')
-      return { mode: 'pull', id: it.id, axis: h.userData.axis, sign: h.userData.sign, rot: it.rot,
+      return { mode: 'pull', riders: ridersOf(it), id: it.id, axis: h.userData.axis, sign: h.userData.sign, rot: it.rot,
         w0: it.w, d0: it.d, h0: it.h, x0: it.x, z0: it.z, hy: it.y + it.h / 2 };
     if (h) {
       const a0 = new THREE.Vector3(it.x, it.y + it.h / 2, it.z);
@@ -1216,6 +1271,7 @@ function updateDrag(d, lr) {
       if (st > 0) { if (Math.abs(y) < 0.03) y = 0; if (Math.abs(y + it.h - H) < 0.06) y = H - it.h; }
       it.y = r3(y);
     }
+    if (it.y > restY(it, it.x, it.z) + 0.02) it.hold = 'free'; else delete it.hold;   // по осям можно оставить в воздухе
     placeItem(it);
     gizmo.position.set(it.x, it.y, it.z);
   } else if (d.mode === 'rotate') {
@@ -1228,6 +1284,7 @@ function updateDrag(d, lr) {
     if (!applyPull(it, d, lr)) return false;
     fillItem(it, objs.get(it.id));
     placeItem(it);
+    settle(d.riders || []);
     updateGizmo();
   }
   d.changed = true;
@@ -1429,9 +1486,10 @@ function updateProps() {
 function editSel(fn, rebuild = true) {
   const it = sel();
   if (!it) return;
+  const riders = ridersOf(it);
   fn(it);
   if (rebuild) fillItem(it, objs.get(it.id));
-  placeItem(it); updateGizmo(); updateProps(); updateStatus(); refreshDims(it.id); commit();
+  placeItem(it); settle(riders); updateGizmo(); updateProps(); updateStatus(); refreshDims(it.id); commit();
 }
 function bindSize(input, key) {
   input.addEventListener('change', () => editSel((it) => {
@@ -1440,7 +1498,7 @@ function bindSize(input, key) {
   }));
 }
 bindSize(P.w, 'w'); bindSize(P.d, 'd'); bindSize(P.h, 'h');
-P.y.addEventListener('change', () => editSel((it) => { it.y = r3(clamp(parseFloat(P.y.value) / 100 || 0, -5, 20)); }, false));
+P.y.addEventListener('change', () => editSel((it) => { it.y = r3(clamp(parseFloat(P.y.value) / 100 || 0, -5, 20)); if (it.y > 0.02) it.hold = 'free'; else delete it.hold; }, false));
 P.rot.addEventListener('change', () => editSel((it) => { it.rot = THREE.MathUtils.degToRad(parseFloat(P.rot.value) || 0); }, false));
 P.color.addEventListener('change', () => editSel((it) => { it.color = P.color.value; }));
 P.name.addEventListener('change', () => editSel((it) => { it.name = P.name.value.trim() || it.name; }, false));
