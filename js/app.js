@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=30';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=31';
 
 const STORE = 'taburetka.project.v1';
 
@@ -615,10 +615,9 @@ function dragMoveCore(it, g, lr) {
     z = h.p.z + nh.y * e + (g.off.z - along * nh.y);
     const rest = restY(it, x, z);
     y = rest;
-    if (h.room) {                       // по стене комнаты предмет можно поднять; у мебели он просто стоит рядом
-      const climb = h.p.y - g.rel, dead = g.float ? 0.05 : 0.35;
-      if (climb >= rest + dead) { y = st > 0 ? Math.round(climb / st) * st : climb; float = true; }
-    }
+    // по стене и по боку другой мебели предмет можно поднять: он приклеивается на высоте курсора
+    const climb = h.p.y - g.rel, dead = g.float ? 0.05 : 0.35;
+    if (climb >= rest + dead) { y = st > 0 ? Math.round(climb / st) * st : climb; float = true; }
   }
   const ch = ceilMin(it, x, z);
   if (ch >= it.h && y + it.h > ch - (float ? 0.06 : 0)) { y = ch - it.h; float = y > restY(it, x, z) + 0.02; }
