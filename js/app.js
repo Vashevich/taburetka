@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, CAT_COLOR } from './furniture.js?v=57';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, CAT_COLOR } from './furniture.js?v=58';
 
 const STORE = 'taburetka.project.v1';
 
@@ -39,7 +39,8 @@ scene.add(ortho);
 const world = new THREE.Group();        // комната + мебель; в XR двигается и масштабируется целиком
 const roomG = new THREE.Group(), itemsG = new THREE.Group(), dimsG = new THREE.Group(),
   tmpG = new THREE.Group(), gizmo = new THREE.Group();
-world.add(roomG, itemsG, dimsG, tmpG, gizmo);
+const autoG = new THREE.Group();        // габаритные размеры предметов: видны, пока в руке рулетка
+world.add(roomG, itemsG, dimsG, tmpG, autoG, gizmo);
 scene.add(world);
 
 scene.add(new THREE.HemisphereLight(0xffffff, 0xb8b0a0, 1.15));
@@ -1260,7 +1261,7 @@ function updateConstSize() {
   world.updateMatrixWorld(true);
   _winv.copy(world.matrixWorld).invert();
   const cl = world.worldToLocal(c.getWorldPosition(new THREE.Vector3()));
-  for (const g of [dimsG, tmpG]) for (const o of g.children) {
+  for (const g of [dimsG, tmpG, autoG]) for (const o of g.children) {
     if (o.userData.bar) { const t = inXR ? 0.004 : 0.0022 * viewHeightAt(o); o.scale.set(t, o.userData.len, t); continue; }
     if (o.userData.dot) { o.scale.setScalar(inXR ? 0.011 : 0.0058 * viewHeightAt(o)); continue; }
     if (!o.userData.label) continue;
@@ -1317,10 +1318,11 @@ function pickHandle() {
 
 // ───────────────────────── рулетка ─────────────────────────
 const DIM = new THREE.MeshBasicMaterial({ color: 0xa61e1e });   // размер стоит в пространстве: мебель его заслоняет
+const DIM_ = DIM, DIMA = new THREE.MeshBasicMaterial({ color: 0x1b1a18, depthTest: false, transparent: true });
 const BAR_GEO = new THREE.CylinderGeometry(1, 1, 1, 8), DOT_GEO = new THREE.SphereGeometry(1, 14, 10);
 let measureA = null;
 const LABEL_GEO = new THREE.PlaneGeometry(1, 1);
-function makeLabel(text) {
+function makeLabel(text, auto) {
   const c = document.createElement('canvas'), x = c.getContext('2d'), font = 'bold 40px "PT Mono", ui-monospace, monospace';
   x.font = font;
   c.width = Math.ceil(x.measureText(text).width) + 32;
@@ -1330,19 +1332,19 @@ function makeLabel(text) {
   x.beginPath();
   x.rect(3, 3, c.width - 6, 58);
   x.fill();
-  x.strokeStyle = '#A61E1E'; x.lineWidth = 6; x.stroke();
+  x.strokeStyle = auto ? '#1b1a18' : '#A61E1E'; x.lineWidth = 6; x.stroke();
   x.fillStyle = '#1d1d1b'; x.textAlign = 'center'; x.textBaseline = 'middle';
   x.fillText(text, c.width / 2, 34);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const sp = new THREE.Mesh(LABEL_GEO, new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide }));
+  const sp = new THREE.Mesh(LABEL_GEO, new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide, depthTest: !auto }));
   sp.userData = { label: true, aspect: c.width / c.height };
   sp.renderOrder = 20;
   sp.raycast = () => {};
   return sp;
 }
-function dimObjects(group, a, b) {       // жирная линия размера с точками на концах и табличкой
-  const dir = b.clone().sub(a), len = dir.length();
+function dimObjects(group, a, b, auto) { // жирная линия размера с точками на концах и табличкой; auto — габаритный, тёмный, поверх всего
+  const dir = b.clone().sub(a), len = dir.length(), DIM = auto ? DIMA : DIM_;
   const bar = new THREE.Mesh(BAR_GEO, DIM);
   bar.position.copy(a).add(b).multiplyScalar(0.5);
   if (len > 1e-6) bar.quaternion.setFromUnitVectors(THREE.Object3D.DEFAULT_UP, dir.clone().multiplyScalar(1 / len));
@@ -1358,16 +1360,44 @@ function dimObjects(group, a, b) {       // жирная линия размер
     dot.raycast = () => {};
     group.add(dot);
   }
-  const lab = makeLabel(`${Math.round(len * 100)} см`);   // табличка лежит вдоль линии, прямо на ней
+  const lab = makeLabel(`${Math.round(len * 100)} см`, auto);   // табличка лежит вдоль линии, прямо на ней
+  if (auto) for (const o of group.children.slice(-3)) o.renderOrder = 17;
   lab.position.copy(a).add(b).multiplyScalar(0.5);
   lab.userData.a = a.clone(); lab.userData.b = b.clone();
   group.add(lab);
+}
+// Габаритные размеры всех предметов: ширина и глубина по верхним рёбрам с ближней к зрителю стороны,
+// высота — по крайнему левому на экране ребру. При повороте камеры размеры переходят на видимые рёбра.
+let autoKey = '';
+function updateAuto(c) {
+  if (tool !== 'measure') { if (autoG.children.length) { clearGroup(autoG); autoKey = ''; } return; }
+  const cl = world.worldToLocal(c.getWorldPosition(new THREE.Vector3())), q = c.getWorldQuaternion(new THREE.Quaternion());
+  const key = [cur.length, cur.slice(-400), view, ...cl.toArray().map((v) => Math.round(v * 3)), ...q.toArray().map((v) => Math.round(v * 12))].join();
+  if (key === autoKey) return;
+  autoKey = key;
+  clearGroup(autoG);
+  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(q).transformDirection(new THREE.Matrix4().copy(world.matrixWorld).invert());
+  for (const it of state.items) {
+    const f = itemFrame(it), w = it.w / 2, d = it.d / 2, h = it.h;
+    const P = (x, y, z) => f.O.clone().addScaledVector(f.X, x).addScaledVector(f.Y, y).addScaledVector(f.N, z);
+    const sz = P(0, h, d).distanceToSquared(cl) < P(0, h, -d).distanceToSquared(cl) ? d : -d;
+    const sx = P(w, h, 0).distanceToSquared(cl) < P(-w, h, 0).distanceToSquared(cl) ? w : -w;
+    if (it.w >= 0.03) dimObjects(autoG, P(-w, h, sz), P(w, h, sz), true);
+    if (it.d >= 0.03) dimObjects(autoG, P(sx, h, -d), P(sx, h, d), true);
+    if (it.h < 0.03 || c.isOrthographicCamera) continue;
+    let best = null, bs = Infinity;
+    for (const [x, z] of [[-w, -d], [w, -d], [-w, d], [w, d]]) {
+      const m = P(x, h / 2, z).sub(cl), sc = m.dot(right) / (m.length() || 1);
+      if (sc < bs) { bs = sc; best = [x, z]; }
+    }
+    dimObjects(autoG, P(best[0], 0, best[1]), P(best[0], h, best[1]), true);
+  }
 }
 function clearGroup(g) {
   for (const c of [...g.children]) {
     g.remove(c);
     if (c.geometry !== LABEL_GEO && c.geometry !== BAR_GEO && c.geometry !== DOT_GEO) c.geometry?.dispose();
-    if (c.material !== DIM) { c.material?.map?.dispose(); c.material?.dispose(); }
+    if (c.material !== DIM && c.material !== DIMA) { c.material?.map?.dispose(); c.material?.dispose(); }
   }
 }
 // Конец размера может быть привязан к предмету: at = { id, l } — точка в долях его габарита.
@@ -2178,8 +2208,26 @@ const MENU = {
   open() { $('#fileProject').click(); },
   async link() {
     const url = location.origin + location.pathname + '#p=' + b64e(cur);
-    try { await navigator.clipboard.writeText(url); toast('Ссылка скопирована'); }
-    catch { prompt('Ссылка на проект:', url); }
+    let ok = false;
+    try { await navigator.clipboard.writeText(url); ok = true; } catch { /* нет доступа к буферу — пробуем по-старому */ }
+    if (!ok) {
+      const ta = document.createElement('textarea');
+      ta.value = url; ta.style.cssText = 'position:fixed;left:0;top:0;opacity:0';
+      document.body.append(ta); ta.select();
+      try { ok = document.execCommand('copy'); } catch { ok = false; }
+      ta.remove();
+    }
+    if (ok) { toast('Ссылка скопирована'); return; }
+    let dlg = $('#linkDlg');             // буфер недоступен: показываем ссылку, её можно выделить и скопировать руками
+    if (!dlg) {
+      dlg = document.createElement('dialog');
+      dlg.id = 'linkDlg';
+      dlg.innerHTML = '<form method="dialog"><h3>Ссылка на проект</h3><textarea readonly rows="5" style="width:min(80vw,520px)"></textarea><p><button>Закрыть</button></p></form>';
+      document.body.append(dlg);
+    }
+    dlg.querySelector('textarea').value = url;
+    dlg.showModal();
+    dlg.querySelector('textarea').select();
   },
   glb: exportGLB,
   cleardims() { state.dims = []; measureA = null; clearGroup(tmpG); rebuildDims(); commit(); },
@@ -2886,6 +2934,17 @@ $('#btnQL').onclick = quickLook;
 window.__taburetka = { vm, vmBuild, vmDraw, tw, twDraw, twEnsure };
 document.fonts?.load('600 20px Oswald').then(() => { vm.dirty = true; });
 document.fonts?.load('20px "PT Mono"').then(() => { vm.dirty = true; rebuildDims(); });
+// Ссылку с проектом вставили в уже открытую страницу: загружаем его без перезагрузки.
+addEventListener('hashchange', () => {
+  const m = location.hash.match(/[#&]p=([\w-]+)/);
+  if (!m) return;
+  try {
+    const data = JSON.parse(b64d(m[1]));
+    history.replaceState(null, '', location.pathname + location.search);
+    load(data); commit(); homeView();
+    toast('Проект из ссылки открыт. Вернуть прежний — кнопка ↶');
+  } catch { toast('Ссылка на проект повреждена'); }
+});
 function boot() {
   let data = null;
   const m = location.hash.match(/[#&]p=([\w-]+)/);
@@ -2910,6 +2969,7 @@ function boot() {
     else ctl().update();
     if (anims.length) runAnims(dt);
     if (shellDirty) rebuildShellView();
+    updateAuto(renderer.xr.isPresenting ? camera : cam());
     updateConstSize();
     if (renderer.xr.isPresenting || !post) renderer.render(scene, renderer.xr.isPresenting ? camera : cam());
     else { try { post.render(cam()); } catch (e) { console.warn('Затенение отключено', e); post = null; } }
