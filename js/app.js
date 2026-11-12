@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=14';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=15';
 
 const STORE = 'taburetka.project.v1';
 
@@ -549,6 +549,19 @@ controlsPlan.enabled = false;
 const cam = () => (view === 'plan' ? ortho : camera);
 const ctl = () => (view === 'plan' ? controlsPlan : controls3d);
 
+function homeView() {                    // вид и положение комнаты по умолчанию
+  camera.position.set(4.6, 4.4, 6.2);
+  controls3d.target.set(0, 0.6, 0);
+  ortho.position.set(0, 50, 0);
+  controlsPlan.target.set(0, 0, 0);
+  ortho.zoom = 1;
+  fitOrtho();
+  if (renderer.xr.isPresenting) {       // в шлеме комната снова встаёт вокруг точки входа
+    world.position.set(0, 0, 0); world.rotation.set(0, 0, 0);
+    rig.position.set(0, 0, 0); rig.rotation.set(0, 0, 0);
+    if (xr.mini) setMini(false);
+  }
+}
 function fitOrtho() {
   const a = innerWidth / innerHeight;
   const S = Math.max(state.room.d, state.room.w / a) * 0.62 + 0.6;
@@ -1498,7 +1511,12 @@ const MENU = {
   },
   glb: exportGLB,
   cleardims() { state.dims = []; measureA = null; clearGroup(tmpG); rebuildDims(); commit(); },
-  new() { if (confirm('Убрать всю мебель и размеры?')) { state.items = []; state.dims = []; load(JSON.parse(serialize())); commit(); } },
+  new() {                               // пустая комната по умолчанию: размеры, ровный потолок, свет, вид — всё как в начале
+    load({ room: { w: 4, d: 5, h: 2.7, floor: '#d9c7a8', wall: '#f4f1ea' }, snap: state.snap, items: [], dims: [] });
+    commit();
+    homeView();
+    toast('Новая пустая комната. Вернуть прежнюю — кнопка ↶');
+  },
   help() { $('#helpDlg').showModal(); },
 };
 $('#menu').onclick = (e) => { const a = e.target.dataset?.act; if (a) { $('#menu').hidden = true; MENU[a](); } };
