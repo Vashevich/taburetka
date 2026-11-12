@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=21';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=22';
 
 const STORE = 'taburetka.project.v1';
 
@@ -454,20 +454,22 @@ function roomExit(lr) {                 // точка, в которой луч 
 }
 function makeGrab(it, pl, free = false) {   // pl — точка захвата в координатах world
   return { id: it.id, rel: pl.y - it.y, off: { x: it.x - pl.x, z: it.z - pl.z }, base: it.y, free,
-    float: it.y > restY(it, it.x, it.z) + 0.02, changed: false, turned: false };
+    float: it.y > restY(it, it.x, it.z) + 0.02, changed: false, turned: false,
+    hang: it.y > restY(it, it.x, it.z) + 0.02 && it.y + it.h > ceilMin(it, it.x, it.z) - 0.03 };   // висит под потолком
 }
-// Перетаскивание: предмет едет по полу, встаёт на другие предметы, упирается в стены,
-// а если тянуть дальше в стену — поднимается по ней до потолка.
+// Перетаскивание: предмет всегда к чему-то примагничен — к полу, к другому предмету, к стене или к потолку.
+// В воздухе он не остаётся: оторванный от стены падает на опору. Поднять в воздух можно только инструментом «По осям».
 function dragMove(it, g, lr) {
   const R = state.room, snap = state.snap > 0;
   if (g.free || !snap) {
     const p = hitPlaneY(lr, it.y + g.rel);
     if (!p) return false;
     [it.x, it.z] = snapPos(it, p.x + g.off.x, p.z + g.off.z);
+    if (!g.free) it.y = restY(it, it.x, it.z);
     return true;
   }
   let x = 0, z = 0, p = null, ceil = false, stackY = null;
-  if (!g.float && it.type !== 'rug') {  // курсор на верхней грани другого предмета — ставим на неё
+  if (!g.float && !g.hang && it.type !== 'rug') {  // курсор на верхней грани другого предмета — ставим на неё
     const t = topUnder(it, lr);
     if (t && t.y + it.h <= ceilMin(it, t.x, t.z) + 1e-3) {
       const pp = hitPlaneY(lr, t.y + g.rel), cand = [];
@@ -493,8 +495,10 @@ function dragMove(it, g, lr) {
     x = e.x + (ceil ? 0 : g.off.x); z = e.z + (ceil ? 0 : g.off.z);
   }
   const f = footprint(it), fitX = R.w >= 2 * f.hx, fitZ = R.d >= 2 * f.hz;
-  const overX = fitX && (x - f.hx < -R.w / 2 - 0.02 || x + f.hx > R.w / 2 + 0.02);
-  const overZ = fitZ && (z - f.hz < -R.d / 2 - 0.02 || z + f.hz > R.d / 2 + 0.02);
+  // у стены: предмет упёрся в неё, либо уже висит на ней и остаётся вплотную
+  const tol = g.float ? -0.03 : 0.02;
+  const overX = fitX && (x - f.hx < -R.w / 2 - tol || x + f.hx > R.w / 2 + tol);
+  const overZ = fitZ && (z - f.hz < -R.d / 2 - tol || z + f.hz > R.d / 2 + tol);
   [x, z] = snapPos(it, x, z);
   if (fitX) x = clamp(x, -R.w / 2 + f.hx, R.w / 2 - f.hx);
   if (fitZ) z = clamp(z, -R.d / 2 + f.hz, R.d / 2 - f.hz);
@@ -513,15 +517,16 @@ function dragMove(it, g, lr) {
     if (fitZ) z = clamp(z, -R.d / 2 + f.hz, R.d / 2 - f.hz);
   }
   const rest = stackY !== null ? r3(stackY) : restY(it, x, z);
-  let y = g.float ? it.y : rest;
+  let y = rest;                         // без стены и потолка предмет стоит на опоре
   if (climb !== null) {
     const dead = g.float ? 0.05 : 0.35;   // стоящий на полу предмет отрывается не сразу
     y = climb < rest + dead ? rest : Math.round(climb / state.snap) * state.snap;
   }
   const ch = ceilMin(it, x, z);         // потолок может быть наклонным
-  if (ch >= it.h && (ceil || y + it.h > ch - 0.06)) y = ch - it.h;
+  if (ch >= it.h && (ceil || g.hang || y + it.h > ch - 0.06)) y = ch - it.h;
   it.x = r3(x); it.z = r3(z); it.y = r3(y);
-  g.base = g.float ? it.y : rest;
+  g.float = y > rest + 0.02;            // висит на стене или под потолком
+  g.base = rest;
   return true;
 }
 const AXES = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
@@ -1345,7 +1350,7 @@ canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // ───────────────────────── интерфейс ─────────────────────────
 const HINTS = {
-  select: 'Тащите предмет: он встаёт на пол или на другую мебель, у стены — поднимается по ней',
+  select: 'Тащите предмет: он всегда примагничен — к полу, к другой мебели, к стене или потолку. Поднять в воздух — инструмент «По осям»',
   room: 'Комната: нажмите на точку, чёрточку-ребро или плашку грани — появятся стрелки, тяните за них. Нажатие по ребру в другом месте ставит там излом. Солнце — направление света',
   erase: 'Ластик: наведите на предмет или размер — он станет красным — и нажмите, чтобы удалить',
   act: 'Нажимайте на дверцы и ящики — они открываются и закрываются',
