@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=33';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=34';
 
 const STORE = 'taburetka.project.v1';
 
@@ -1050,7 +1050,13 @@ function dimEnd(m, k) {
   if (!it) return new THREE.Vector3(...m[k]);
   if (at.n >= 0) { const pts = itemPoints(it); if (pts.length === at.c && pts[at.n]) return pts[at.n].clone(); }
   const c = Math.cos(it.rot), s = Math.sin(it.rot), lx = at.l[0] * it.w, lz = at.l[2] * it.d;
-  return new THREE.Vector3(it.x + c * lx + s * lz, it.y + at.l[1] * it.h, it.z - s * lx + c * lz);
+  const p = new THREE.Vector3(it.x + c * lx + s * lz, it.y + at.l[1] * it.h, it.z - s * lx + c * lz);
+  if (at.n === undefined) {              // старый размер: один раз находим угол детали, на котором он стоит
+    const pts = itemPoints(it); let bi = -1, bd = 0.012;
+    pts.forEach((q, i) => { const dd = q.distanceTo(p); if (dd < bd) { bd = dd; bi = i; } });
+    at.n = bi; if (bi >= 0) at.c = pts.length;
+  }
+  return p;
 }
 function rebuildDims() {
   clearGroup(dimsG);
