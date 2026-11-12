@@ -815,6 +815,8 @@ const CAT_OF = {
 export const NOSUP_T = ['door2', 'slidedoor', 'balcony', 'opening', 'arch', 'window1', 'window3', 'panorama', 'roundwindow',
   'ficus', 'palm', 'sansev', 'cactus', 'flowers', 'mirror', 'shower', 'officechair', 'lowwall', 'column', 'bunk'];
 export const RUGS = new Set(['rug', 'roundrug']);
+// Окна, двери и проёмы — часть стены: встраиваются в поверхность комнаты и вырезают в ней отверстие.
+export const EMBED_T = new Set(['window', 'window1', 'window3', 'panorama', 'roundwindow', 'balcony', 'door', 'door2', 'slidedoor', 'opening', 'arch']);
 CATALOG.sort((a, b) => { const o = Object.values(CAT_OF).flat(); return o.indexOf(a.type) - o.indexOf(b.type); });
 for (const d of CATALOG) d.cat = Object.keys(CAT_OF).find((k) => CAT_OF[k].includes(d.type)) || 'decor';
 

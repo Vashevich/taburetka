@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS } from './furniture.js?v=52';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T } from './furniture.js?v=53';
 
 const STORE = 'taburetka.project.v1';
 
@@ -94,8 +94,8 @@ function demo() {
   };
   return {
     v: 1, room: { w: 5, d: 5, h: H, floor: state.room.floor, wall: state.room.wall, mesh }, snap: 0.05, dims: [],
-    items: [mk('bed', -1.7, -1.45), mk('nightstand', -0.65, -2.3), mk('window', 0.6, -2.45),
-      mk('desk', 2.2, -1.0, -Math.PI / 2), mk('chair', 1.6, -1.0, Math.PI / 2), mk('door', 1.5, 0.45, Math.PI),
+    items: [mk('bed', -1.7, -1.45), mk('nightstand', -0.65, -2.3), { ...mk('window', 0.6, -2.5), embed: true },
+      mk('desk', 2.2, -1.0, -Math.PI / 2), mk('chair', 1.6, -1.0, Math.PI / 2), { ...mk('door', 1.5, 0.5, Math.PI), embed: true },
       mk('rug', 0.4, -0.5), mk('wardrobe', -2.2, 1.5, Math.PI / 2, P), mk('stool', -1.2, 2.0, 0, P), mk('human', -0.7, 1.2, 0, P)],
   };
 }
@@ -171,7 +171,8 @@ function load(data) {
 }
 
 // ───────────────────────── комната ─────────────────────────
-let floorMesh, wallMesh, gridLines, wallEdges, outline, shadowFloor;
+let floorMesh, wallMesh, floorView, wallView, gridLines, wallEdges, outline, shadowFloor;   // Mesh — сплошная оболочка для лучей, View — видимая, с отверстиями
+let shellDirty = false;
 function disposeChildren(g) {
   const shared = g.userData.shared;
   for (const c of [...g.children]) {
@@ -344,17 +345,60 @@ function applySun() {
   sun.position.copy(p.normalize().multiplyScalar(14));
   sun.target.position.set(0, 0, 0);
 }
-function buildRoom() {
-  disposeChildren(roomG);
-  const { w, d, floor, wall } = state.room, m = roomMesh();
-  // оболочка: пол отдельно (свой цвет), стены и потолок вместе; грани — плоские многоугольники
+function shellGeo(pos, col) {
+  const g = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  if (col) g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.computeVertexNormals();
+  return g;
+}
+// Оси встроенного предмета: O — середина низа, X — ширина, Y — высота, N — наружу из поверхности в комнату.
+function itemFrame(it) {
+  const O = new THREE.Vector3(it.x, it.y || 0, it.z);
+  if (!it.n) { const c = Math.cos(it.rot || 0), sn = Math.sin(it.rot || 0); return { O, X: new THREE.Vector3(c, 0, -sn), Y: new THREE.Vector3(0, 1, 0), N: new THREE.Vector3(sn, 0, c) }; }
+  const N = new THREE.Vector3(...it.n).normalize(), Y = new THREE.Vector3(0, 1, 0).addScaledVector(N, -N.y);
+  if (Y.lengthSq() < 1e-4) Y.set(0, 0, -1);
+  Y.normalize();
+  return { O, X: Y.clone().cross(N).normalize(), Y, N };
+}
+function holeOutline(it) {               // контур отверстия в координатах предмета: x — поперёк, y — вверх от низа
+  const w = it.w, h = it.h, t = it.type, y0 = (CATALOG.find((c) => c.type === t)?.y > 0) ? 0.04 : 0.004;
+  if (t === 'roundwindow') return Array.from({ length: 24 }, (_, i) => [Math.cos(i / 24 * 6.2832) * (w / 2 - 0.04), h / 2 + Math.sin(i / 24 * 6.2832) * (h / 2 - 0.04)]);
+  if (t === 'arch') {
+    const r = (w - 0.2) / 2 - 0.004, sp = Math.max(0.1, h - 0.1 - (w - 0.2) / 2), pts = [[-r, y0], [r, y0]];
+    for (let i = 0; i <= 12; i++) pts.push([Math.cos(i / 12 * Math.PI) * r, sp + Math.sin(i / 12 * Math.PI) * r]);
+    return pts;
+  }
+  const i = t === 'opening' ? 0.065 : 0.04;
+  return [[-w / 2 + i, y0], [w / 2 - i, y0], [w / 2 - i, h - i], [-w / 2 + i, h - i]];
+}
+const inPoly = (p, poly) => {
+  let c = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++)
+    if ((poly[i].y > p.y) !== (poly[j].y > p.y) && p.x < ((poly[j].x - poly[i].x) * (p.y - poly[i].y)) / (poly[j].y - poly[i].y) + poly[i].x) c = !c;
+  return c;
+};
+// Треугольники оболочки. holes — вырезать отверстия под встроенные окна и двери.
+function shellData(holes) {
+  const { floor, wall } = state.room, m = roomMesh();
   const fpos = [], spos = [], fcol = [], scol = [], ftri = [], stri = [];
   let flat = true;
+  const emb = holes ? state.items.filter((q) => q.embed && EMBED_T.has(q.type)).map((q) => ({ fr: itemFrame(q), out: holeOutline(q) })) : [];
   m.f.forEach((f, fi) => {
     const n = faceNormal(f), up = n.y > 0.7, out = up ? fpos : spos, P = f.map(mv);
     const col = new THREE.Color((m.c && m.c[fi]) || (up ? floor : wall)), ocol = up ? fcol : scol;
     const u = new THREE.Vector3(Math.abs(n.y) < 0.9 ? 0 : 1, Math.abs(n.y) < 0.9 ? 1 : 0, 0).cross(n).normalize(), w = n.clone().cross(u);
-    const tris = P.length === 3 ? [[0, 1, 2]] : THREE.ShapeUtils.triangulateShape(P.map((q) => new THREE.Vector2(q.dot(u), q.dot(w))), []);
+    const to2 = (q) => new THREE.Vector2(q.dot(u), q.dot(w)), C2 = P.map(to2), H2 = [], boxes = [];
+    for (const e of emb) {
+      if (e.fr.N.dot(n) < 0.985 || Math.abs(e.fr.O.clone().sub(P[0]).dot(n)) > 0.06) continue;
+      const pts3 = e.out.map(([x, y]) => e.fr.O.clone().addScaledVector(e.fr.X, x).addScaledVector(e.fr.Y, y)), pts2 = pts3.map(to2);
+      if (!pts2.every((q) => inPoly(q, C2))) continue;                       // целиком на грани
+      const bb = new THREE.Box2().setFromPoints(pts2);
+      if (boxes.some((o) => o.intersectsBox(bb))) continue;                  // отверстия не пересекаются
+      boxes.push(bb);
+      for (const q of pts3) q.addScaledVector(n, -q.clone().sub(P[0]).dot(n)); // точно в плоскость грани
+      P.push(...pts3); H2.push(pts2);
+    }
+    const tris = P.length === 3 ? [[0, 1, 2]] : THREE.ShapeUtils.triangulateShape(C2, H2);
     for (const [i, j, k] of tris) {
       const a = P[i], b = P[j], c = P[k], flip = b.clone().sub(a).cross(c.clone().sub(a)).dot(n) < 0;
       out.push(a.x, a.y, a.z, ...(flip ? [c.x, c.y, c.z, b.x, b.y, b.z] : [b.x, b.y, b.z, c.x, c.y, c.z]));
@@ -363,18 +407,33 @@ function buildRoom() {
     }
     if (up && f.some((i) => Math.abs(m.v[i][1]) > 1e-3)) flat = false;
   });
-  const geo = (pos, col) => {
-    const g = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    if (col) g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-    g.computeVertexNormals();
-    return g;
-  };
-  floorMesh = new THREE.Mesh(geo(fpos, fcol), new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 }));
+  return { fpos, spos, fcol, scol, ftri, stri, flat };
+}
+function rebuildShellView() {
+  shellDirty = false;
+  if (!floorView) return;
+  let d;
+  try { d = shellData(true); } catch (e) { console.warn('Отверстия не построились', e); d = shellData(false); }
+  floorView.geometry.dispose(); wallView.geometry.dispose();
+  floorView.geometry = shellGeo(d.fpos, d.fcol);
+  wallView.geometry = shellGeo(d.spos, d.scol);
+}
+function buildRoom() {
+  disposeChildren(roomG);
+  const { w, d, floor, wall } = state.room, m = roomMesh();
+  // оболочка: пол отдельно (свой цвет), стены и потолок вместе; грани — плоские многоугольники
+  const { fpos, spos, fcol, scol, ftri, stri, flat } = shellData(false);
+  const solid = () => new THREE.MeshBasicMaterial();
+  floorMesh = new THREE.Mesh(shellGeo(fpos, fcol), solid());
   floorMesh.userData.tri = ftri;
-  floorMesh.receiveShadow = true;
-  wallMesh = new THREE.Mesh(geo(spos, scol), new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 1, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 }));
+  wallMesh = new THREE.Mesh(shellGeo(spos, scol), solid());
   wallMesh.userData.tri = stri;
-  wallMesh.receiveShadow = true;
+  floorMesh.visible = wallMesh.visible = false;          // сплошные грани только ловят лучи
+  floorView = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 }));
+  wallView = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 1, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 }));
+  floorView.receiveShadow = wallView.receiveShadow = true;
+  rebuildShellView();
+  const geo = shellGeo;
   const epos = [];                      // все рёбра граней, включая линии разреза на ровной поверхности
   for (const [a, b] of meshEdges()) epos.push(...m.v[a], ...m.v[b]);
   wallEdges = new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(epos, 3)), EDGE);
@@ -402,8 +461,8 @@ function buildRoom() {
   shadowFloor = new THREE.Mesh(geo(fpos), new THREE.ShadowMaterial({ opacity: 0.28 }));
   shadowFloor.position.y = 0.002;
   shadowFloor.receiveShadow = true;
-  for (const mesh of [floorMesh, gridLines, wallMesh, wallEdges, outline, shadowFloor]) mesh.raycast = () => {};
-  roomG.add(floorMesh, gridLines, wallMesh, wallEdges, outline, shadowFloor);
+  for (const mesh of [floorMesh, gridLines, wallMesh, wallEdges, outline, shadowFloor, floorView, wallView]) mesh.raycast = () => {};
+  roomG.add(floorMesh, floorView, gridLines, wallMesh, wallView, wallEdges, outline, shadowFloor);
   applySun();
   updateXRVis();
 }
@@ -412,12 +471,21 @@ function buildRoom() {
 function fillItem(it, g) {
   disposeChildren(g);
   fillBlank(g, it.type, it.w, it.d, it.h, it.color, it.open, it.pose);
+  if (it.embed) shellDirty = true;
 }
 function placeItem(it) {
   const g = objs.get(it.id);
   if (!g) return;
   g.position.set(it.x, it.y || 0, it.z);
-  g.rotation.y = it.rot || 0;
+  if (it.n) { const fr = itemFrame(it); g.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(fr.X, fr.Y, fr.N)); }
+  else g.rotation.set(0, it.rot || 0, 0);
+  if (it.embed || EMBED_T.has(it.type)) shellDirty = true;
+}
+function syncGizmo(it) {                 // рамка и гамбол следуют за предметом, в том числе за наклонным
+  if (tool === 'room') return;
+  const g = objs.get(it.id);
+  gizmo.position.set(it.x, it.y || 0, it.z);
+  if (g) gizmo.quaternion.copy(g.quaternion);
 }
 function makeItemObj(it) {
   const g = new THREE.Group();
@@ -608,6 +676,35 @@ function castScene(o, d, it) {          // первое, во что упира�
   }
   return null;
 }
+function castShell(o, d) {              // во что упирается луч на оболочке комнаты: точка и нормаль грани
+  if (!wallMesh) return null;
+  world.updateMatrixWorld(true);
+  downRay.set(o.clone().applyMatrix4(world.matrixWorld), d.clone().transformDirection(world.matrixWorld));
+  const hits = [];
+  for (const mesh of [wallMesh, floorMesh]) THREE.Mesh.prototype.raycast.call(mesh, downRay, hits);
+  hits.sort((a, b) => a.distance - b.distance);
+  const h = hits[0];
+  if (!h || !h.face) return null;
+  const inv = new THREE.Matrix4().copy(world.matrixWorld).invert();
+  return { p: world.worldToLocal(h.point.clone()), n: h.face.normal.clone().transformDirection(h.object.matrixWorld).transformDirection(inv).normalize() };
+}
+function embedPlace(it, h) {
+  const st = state.snap, sn = (v) => (st > 0 ? Math.round(v / st) * st : v), n = h.n, onFloor = !(CATALOG.find((c) => c.type === it.type)?.y > 0);
+  it.embed = true;
+  if (Math.abs(n.y) < 0.2) {            // стена: предмет стоит вертикально, лицом в комнату
+    delete it.n;
+    it.rot = Math.atan2(n.x, n.z);
+    const t = new THREE.Vector3(Math.cos(it.rot), 0, -Math.sin(it.rot)), s = h.p.dot(t), p = h.p.clone().addScaledVector(t, sn(s) - s);
+    it.x = r3(p.x); it.z = r3(p.z);
+    const fl = floorAt(p.x + n.x * 0.05, p.z + n.z * 0.05);
+    it.y = r3(onFloor ? fl : Math.max(fl, sn(h.p.y - it.h / 2)));
+    return;
+  }
+  it.n = [r3(n.x), r3(n.y), r3(n.z)];   // скос, потолок или пол: предмет ложится в плоскость грани, серединой под курсор
+  it.rot = 0;
+  const fr = itemFrame({ ...it, x: 0, y: 0, z: 0 }), o = h.p.clone().addScaledVector(fr.Y, -it.h / 2);
+  it.x = r3(o.x); it.y = r3(o.y); it.z = r3(o.z);
+}
 function dragMoveCore(it, g, lr) {
   const R = state.room, st = state.snap;
   if (g.free) {
@@ -615,6 +712,11 @@ function dragMoveCore(it, g, lr) {
     if (!p) return false;
     [it.x, it.z] = snapPos(it, p.x + g.off.x, p.z + g.off.z);
     return true;
+  }
+  if (EMBED_T.has(it.type)) {           // окно, дверь, проём: ложится в поверхность комнаты под курсором
+    const eh = castShell(lr.o, lr.d);
+    if (eh) { embedPlace(it, eh); g.float = true; return true; }
+    delete it.n; delete it.embed;       // мимо комнаты — обычный предмет
   }
   let x, z, y, float = false;
   // нижний щуп: луч, опущенный на высоту захвата, ищет опору — пол или верх мебели
@@ -700,10 +802,11 @@ function addItemData(it) {
   while (state.items.some((o) => Math.abs(o.x - x) < 0.03 && Math.abs(o.z - z) < 0.03)) { x += 0.2; z += 0.2; }
   it.x = r3(x); it.z = r3(z);
   const R = state.room;
-  if (it.y > 0.02) {                    // настенный предмет сразу встаёт на ближайшую стену, лицом в комнату
+  if (it.y > 0.02 || EMBED_T.has(it.type)) {   // настенный предмет сразу встаёт на ближайшую стену, лицом в комнату; окна и двери — в саму стену
     const opts = [[Math.abs(z + R.d / 2), 0], [Math.abs(z - R.d / 2), Math.PI], [Math.abs(x + R.w / 2), Math.PI / 2], [Math.abs(x - R.w / 2), -Math.PI / 2]];
     it.rot = opts.sort((p, q) => p[0] - q[0])[0][1];
-    const f = footprint(it);
+    const f = EMBED_T.has(it.type) ? { hx: 0, hz: 0 } : footprint(it);
+    if (EMBED_T.has(it.type)) it.embed = true;
     if (it.rot === 0) it.z = r3(-R.d / 2 + f.hz); else if (it.rot === Math.PI) it.z = r3(R.d / 2 - f.hz);
     else if (it.rot > 0) it.x = r3(-R.w / 2 + f.hx); else it.x = r3(R.w / 2 - f.hx);
     it.hold = 'wall';
@@ -726,6 +829,7 @@ function removeItem(id) {
   const g = objs.get(id);
   if (g) { disposeChildren(g); itemsG.remove(g); objs.delete(id); }
   state.items = state.items.filter((i) => i.id !== id);
+  shellDirty = true;
   settle(riders);
   if (selId === id) select(null);
   commit();
@@ -918,7 +1022,7 @@ function updateGizmo() {
   if (tool === 'room') {                // ручки оболочки: вершины, рёбра, грани и солнце
     gizmo.visible = true;
     gizmo.position.set(0, 0, 0);
-    gizmo.rotation.y = 0;
+    gizmo.rotation.set(0, 0, 0);
     const m = roomMesh(), key = roomSel ? roomSel.key : '';
     let selPos = null;
     const mk = (p, el, col, cs, shape, dir) => {
@@ -965,7 +1069,8 @@ function updateGizmo() {
   gizmo.visible = !!it;
   if (!it) return;
   gizmo.position.set(it.x, it.y, it.z);
-  gizmo.rotation.y = it.rot;
+  gizmo.rotation.set(0, it.rot || 0, 0);
+  if (it.n && objs.get(it.id)) gizmo.quaternion.copy(objs.get(it.id).quaternion);
   const box = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(it.w + 0.012, it.h + 0.012, it.d + 0.012)), SEL);
   box.position.y = it.h / 2;
   box.renderOrder = 10;
@@ -1465,7 +1570,7 @@ function updateDrag(d, lr) {
   if (d.mode === 'move') {
     if (!dragMove(it, d, lr)) return false;
     placeItem(it);
-    if (tool !== 'room') gizmo.position.set(it.x, it.y, it.z);
+    syncGizmo(it);
   } else if (d.mode === 'axis') {
     const sp = axisParam(lr, d.a0, d.dir);
     if (sp === null) return false;
@@ -1486,13 +1591,13 @@ function updateDrag(d, lr) {
     }
     if (it.y > restY(it, it.x, it.z) + 0.02) it.hold = 'free'; else delete it.hold;   // по осям можно оставить в воздухе
     placeItem(it);
-    if (tool !== 'room') gizmo.position.set(it.x, it.y, it.z);
+    syncGizmo(it);
   } else if (d.mode === 'rotate') {
     const p = hitPlaneY(lr, d.py ?? it.y);
     if (!p) return false;
     it.rot = snapRot(d.rot0 + Math.atan2(p.x - it.x, p.z - it.z) - d.a0);
     placeItem(it);
-    if (tool !== 'room') gizmo.rotation.y = it.rot;
+    syncGizmo(it);
   } else if (d.mode === 'pull') {
     if (!applyPull(it, d, lr)) return false;
     fillItem(it, objs.get(it.id));
@@ -2379,13 +2484,13 @@ function updateXRVis() {
   ground.visible = !pass && !xr.mini;
   scene.background = pass ? null : SKY;
   scene.fog = pass || view === 'plan' ? null : FOG;   // на плане камера далеко сверху — дымка замыливала бы всё
-  floorMesh.visible = wallMesh.visible = wallEdges.visible = !bare;
+  floorView.visible = wallView.visible = wallEdges.visible = !bare;
   gridLines.visible = !bare && state.grid !== false;
   farGrid.visible = state.grid !== false;
   outline.visible = shadowFloor.visible = bare;
-  if (view === 'plan' && !renderer.xr.isPresenting) wallMesh.visible = false;   // на плане из оболочки виден только пол
+  if (view === 'plan' && !renderer.xr.isPresenting) wallView.visible = false;   // на плане из оболочки виден только пол
   if (state.room.blank) {               // чистый лист: комнаты не видно, тени ложатся прямо на подложку
-    floorMesh.visible = wallMesh.visible = wallEdges.visible = gridLines.visible = outline.visible = false;
+    floorView.visible = wallView.visible = wallEdges.visible = gridLines.visible = outline.visible = false;
     shadowFloor.visible = true;
   }
   world.visible = !ar || xr.anchored;
@@ -2653,6 +2758,7 @@ function boot() {
     if (renderer.xr.isPresenting) xrTick(frame, dt);
     else ctl().update();
     if (anims.length) runAnims(dt);
+    if (shellDirty) rebuildShellView();
     updateConstSize();
     if (renderer.xr.isPresenting || !post) renderer.render(scene, renderer.xr.isPresenting ? camera : cam());
     else { try { post.render(cam()); } catch (e) { console.warn('Затенение отключено', e); post = null; } }
