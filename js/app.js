@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=46';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE } from './furniture.js?v=47';
 
 const STORE = 'taburetka.project.v1';
 
@@ -1009,6 +1009,7 @@ function viewHeightAt(obj) {
   obj.getWorldPosition(_v); c.getWorldPosition(_c);
   return (_v.distanceTo(_c) * 2 * Math.tan(THREE.MathUtils.degToRad(c.fov / 2))) / ws;
 }
+const _m1 = new THREE.Vector3(), _x = new THREE.Vector3(), _y = new THREE.Vector3(), _n = new THREE.Vector3(), _up = new THREE.Vector3(), _m4 = new THREE.Matrix4();
 const _pa = new THREE.Vector2(), _pb = new THREE.Vector2(), _pc = new THREE.Vector2(), _q = new THREE.Quaternion(), _zAxis = new THREE.Vector3(0, 0, 1), _winv = new THREE.Matrix4();
 function updateConstSize() {
   for (const h of handles) if (h.userData.cs) h.scale.setScalar(h.userData.cs * viewHeightAt(h));
@@ -1028,16 +1029,24 @@ function updateConstSize() {
     const s = inXR ? 0.055 : 0.034 * viewHeightAt(o);
     o.scale.set(s * o.userData.aspect, s, 1);
     if (inXR) { o.rotation.set(0, Math.atan2(cl.x - o.position.x, cl.z - o.position.z), 0); continue; }
-    o.quaternion.copy(c.quaternion);
     const A = o.userData.a, B = o.userData.b;
-    if (!A || !B) continue;
+    if (!A || !B) { o.quaternion.copy(c.quaternion); continue; }
     // На экране: табличка повёрнута вдоль линии размера и уходит по ней в сторону, если закрывает ручку гамбола.
     const W = canvas.clientWidth / 2, Hh = canvas.clientHeight / 2;
     const px = (p, out) => { _v.copy(p).applyMatrix4(world.matrixWorld).project(c); out.set(_v.x * W, _v.y * Hh); return Math.abs(_v.z) <= 1; };
-    if (!px(A, _pa) || !px(B, _pb)) { o.position.copy(A).add(B).multiplyScalar(0.5); continue; }
-    let ang = Math.atan2(_pb.y - _pa.y, _pb.x - _pa.x);
-    if (ang > 1.83) ang -= Math.PI; else if (ang <= -1.31) ang += Math.PI;   // текст читается слева направо, на крутых линиях — снизу вверх
-    o.quaternion.multiply(_q.setFromAxisAngle(_zAxis, ang));
+    px(A, _pa); px(B, _pb);
+    // Табличка привязана к линии: длинной стороной вдоль неё, вокруг линии доворачивается к зрителю.
+    // Если смотреть вдоль линии, она видна с ребра.
+    const mid = _m1.copy(A).add(B).multiplyScalar(0.5);
+    const X = _x.copy(B).sub(A).normalize(), view = c.isOrthographicCamera ? _c.set(0, 1, 0) : _c.copy(cl).sub(mid).normalize();
+    const N = _n.copy(view).addScaledVector(X, -view.dot(X));
+    if (N.lengthSq() < 1e-6) N.set(X.z, 0, -X.x).lengthSq() < 1e-6 && N.set(1, 0, 0);
+    N.normalize();
+    const up = _up.set(0, 1, 0).applyQuaternion(c.quaternion).transformDirection(_winv);   // «верх экрана» в координатах комнаты
+    let Y = _y.crossVectors(N, X);
+    const sc = Y.dot(up);
+    if (Math.abs(sc) < 0.3 ? X.dot(up) < 0 : sc < 0) { X.negate(); Y.negate(); }   // текст не вверх ногами; на крутых линиях — снизу вверх
+    o.quaternion.setFromRotationMatrix(_m4.makeBasis(X, Y, N));
     let best = 0.5;
     if (handles.length && tool !== 'room') {
       const lim = 0.034 * Hh * o.userData.aspect + 16;
@@ -1053,9 +1062,8 @@ function updateConstSize() {
       }
     }
     o.position.copy(A).lerp(B, best);
-    // чуть к зрителю, чтобы табличка не тонула в поверхности, на которой лежит размер
-    if (c.isOrthographicCamera) o.position.y += s * o.userData.aspect * 0.5;
-    else o.position.add(_c.copy(cl).sub(o.position).normalize().multiplyScalar(s * o.userData.aspect * 0.5));
+    // чуть в сторону зрителя, чтобы табличка не тонула в поверхности, на которой лежит размер
+    o.position.addScaledVector(N, s * 0.5);
   }
 }
 function pickHandle() {
