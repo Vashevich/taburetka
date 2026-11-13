@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=73';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=74';
 
 const STORE = 'taburetka.project.v1';
 
@@ -1011,7 +1011,7 @@ async function initPost() {
     class SoftAO extends GTAOPass {     // ручки, размеры и подложка в затенении не участвуют
       overrideVisibility() {
         super.overrideVisibility();
-        for (const o of [gizmo, dimsG, tmpG, ground, snapMarker, eraseBox, cutMarker, cutMarkerA, cutLine]) o.visible = false;
+        for (const o of [gizmo, dimsG, tmpG, autoG, tagsG, faceFill, faceLine, ground, snapMarker, eraseBox, cutMarker, cutMarkerA, cutLine]) o.visible = false;
       }
     }
     const sz = renderer.getDrawingBufferSize(new THREE.Vector2());
