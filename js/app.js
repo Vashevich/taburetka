@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=72';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=73';
 
 const STORE = 'taburetka.project.v1';
 
@@ -281,11 +281,45 @@ let faceSel = -1;
 const faceLine = new THREE.LineLoop(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x1f6feb, depthTest: false, transparent: true }));
 faceLine.renderOrder = 10; faceLine.visible = false; faceLine.raycast = () => {};
 world.add(faceLine);
+const faceFill = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: 0x1f6feb, opacity: 0.16, transparent: true, depthTest: false, side: THREE.DoubleSide }));
+faceFill.renderOrder = 9; faceFill.visible = false; faceFill.raycast = () => {};
+world.add(faceFill);
 function pickFace(fi) {
   faceSel = fi;
-  faceLine.visible = fi >= 0;
-  if (fi >= 0) faceLine.geometry.setFromPoints(roomMesh().f[fi].map(mv));
+  faceLine.visible = faceFill.visible = fi >= 0;
+  if (fi >= 0) {                        // обводка и лёгкая заливка: выбранную грань видно, даже когда она повёрнута к зрителю спиной
+    const f = roomMesh().f[fi], P = f.map(mv), n = faceNormal(f);
+    faceLine.geometry.setFromPoints(P);
+    const u = new THREE.Vector3(Math.abs(n.y) < 0.9 ? 0 : 1, Math.abs(n.y) < 0.9 ? 1 : 0, 0).cross(n).normalize(), w = n.clone().cross(u);
+    const tris = P.length === 3 ? [[0, 1, 2]] : THREE.ShapeUtils.triangulateShape(P.map((q) => new THREE.Vector2(q.dot(u), q.dot(w))), []);
+    faceFill.geometry.dispose();
+    faceFill.geometry = new THREE.BufferGeometry().setFromPoints(tris.flat().map((i) => P[i]));
+  }
   updateFacePanel();
+}
+// Все грани под курсором, от ближней видимой к дальним; за видимыми идут те, что повёрнуты спиной (ближние стены, потолок).
+function facesAtRay() {
+  if (!wallMesh) return [];
+  world.updateMatrixWorld(true);
+  shellRay.ray.copy(ray.ray);
+  const hits = [];
+  for (const mesh of [wallMesh, floorMesh]) {
+    mesh.material.side = THREE.DoubleSide;
+    THREE.Mesh.prototype.raycast.call(mesh, shellRay, hits);
+    mesh.material.side = THREE.FrontSide;
+  }
+  hits.sort((p, q) => p.distance - q.distance);
+  const wm = world.matrixWorld, front = [], back = [];
+  for (const h of hits) {
+    const fi = h.object.userData.tri[h.faceIndex];
+    if (fi === undefined || front.includes(fi) || back.includes(fi)) continue;
+    (h.face.normal.clone().transformDirection(wm).dot(shellRay.ray.direction) < 0 ? front : back).push(fi);
+  }
+  return [...front, ...back];
+}
+function stepFace(dir) {                 // кнопки ‹ › в панели: перебор всех граней комнаты по порядку
+  const n = roomMesh().f.length;
+  pickFace(((faceSel < 0 ? 0 : faceSel + dir) % n + n) % n);
 }
 const curFace = () => (tool === 'room' && roomSel && roomSel.kind === 'f' ? +roomSel.key.slice(1) : tool === 'select' ? faceSel : -1);
 function setFaceColor(c) {              // свой цвет у выделенной стены, пола или потолка; null — как у комнаты
@@ -301,7 +335,8 @@ function setFaceColor(c) {              // свой цвет у выделенн
 function updateFacePanel() {
   const fi = curFace(), m = roomMesh(), on = fi >= 0 && fi < m.f.length && !renderer.xr.isPresenting, el = $('#facePanel');
   el.hidden = !on;
-  if (!on) { if (faceSel >= 0 && tool !== 'select') { faceSel = -1; faceLine.visible = false; } return; }
+  if (!on) { if (faceSel >= 0 && tool !== 'select') { faceSel = -1; faceLine.visible = faceFill.visible = false; } return; }
+  $('#fPrev').hidden = $('#fNext').hidden = tool !== 'select';
   const n = faceNormal(m.f[fi]), P = m.f[fi].map(mv);
   // размеры грани: вдоль горизонтали и вдоль подъёма
   const u = new THREE.Vector3(Math.abs(n.y) < 0.9 ? 0 : 1, Math.abs(n.y) < 0.9 ? 1 : 0, 0).cross(n).normalize(), w = n.clone().cross(u);
@@ -439,7 +474,7 @@ function rebuildShellView() {
   wallView.geometry = shellGeo(d.spos, d.scol);
 }
 function buildRoom() {
-  if (faceSel >= 0) { faceSel = -1; faceLine.visible = false; }   // комната перестроена — прежняя грань могла измениться
+  if (faceSel >= 0) { faceSel = -1; faceLine.visible = faceFill.visible = false; }   // комната перестроена — прежняя грань могла измениться
   disposeChildren(roomG);
   const { w, d, floor, wall } = state.room, m = roomMesh();
   // оболочка: пол отдельно (свой цвет), стены и потолок вместе; грани — плоские многоугольники
@@ -1974,7 +2009,10 @@ function onTap(e, dn) {
   }
   if (pk && pk.id === selId && tool === 'select' && dn && dn.wasSel === pk.id) { toggleSub(pk); return; }   // второй клик по уже выбранному предмету — его внутренняя часть
   select(pk ? pk.id : null);
-  if (tool === 'select') { const fi = pk ? -1 : faceAtRay(); pickFace(fi === faceSel ? -1 : fi); }   // мимо мебели — стена, пол или потолок
+  if (tool === 'select') {              // мимо мебели — стена, пол или потолок; повторный клик там же идёт к следующей грани за ней
+    const L = pk ? [] : facesAtRay(), i = L.indexOf(faceSel);
+    pickFace(!L.length ? -1 : i < 0 ? L[0] : i + 1 < L.length ? L[i + 1] : -1);
+  }
 }
 // «Действие»: открыть / закрыть дверцу или ящик, по которому попали
 const anims = [];
@@ -2132,6 +2170,8 @@ swatches($('#rFloorSw'), (c) => { state.room.floor = c; buildRoom(); commit(); }
 swatches($('#rWallSw'), (c) => { state.room.wall = c; buildRoom(); commit(); });
 swatches($('#fSwatches'), (c) => setFaceColor(c));
 $('#fReset').onclick = () => setFaceColor(null);
+$('#fPrev').onclick = () => stepFace(-1);
+$('#fNext').onclick = () => stepFace(1);
 $('#fClose').onclick = () => { if (tool === 'select') pickFace(-1); else { roomSel = null; updateGizmo(); } };
 P.name.addEventListener('change', () => editSel((it) => { it.name = P.name.value.trim() || it.name; }, false));
 P.keep.addEventListener('change', () => editSel((it) => { it.keep = P.keep.checked; }, false));
