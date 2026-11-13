@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=67';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=68';
 
 const STORE = 'taburetka.project.v1';
 
@@ -1014,13 +1014,33 @@ function hitPlaneY(lr, y) {
   return lr.o.clone().addScaledVector(lr.d, t);
 }
 function pickItem() {
-  const hits = ray.intersectObjects(itemsG.children, true);
-  for (const h of hits) {
-    let o = h.object;
-    while (o && o.parent !== itemsG) o = o.parent;
-    if (o && o.userData.id) return { id: o.userData.id, point: h.point.clone(), hit: h };
+  const first = (hits) => {
+    for (const h of hits) {
+      let o = h.object;
+      while (o && o.parent !== itemsG) o = o.parent;
+      if (o && o.userData.id) return { id: o.userData.id, point: h.point.clone(), hit: h };
+    }
+    return null;
+  };
+  const exact = first(ray.intersectObjects(itemsG.children, true));
+  if (exact) return exact;
+  // Мимо: пробуем лучи вокруг курсора (примерно 7 и 13 пикселей) — за тонкую ножку легче ухватиться.
+  const o0 = ray.ray.origin.clone(), d0 = ray.ray.direction.clone(), c = renderer.xr.isPresenting ? camera : cam();
+  const ux = new THREE.Vector3().crossVectors(d0, Math.abs(d0.y) > 0.95 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0)).normalize(), uy = new THREE.Vector3().crossVectors(ux, d0).normalize();
+  const H = Math.max(canvas.clientHeight, 1), ortho = c.isOrthographicCamera && !renderer.xr.isPresenting;
+  const perPx = ortho ? (c.top - c.bottom) / c.zoom / H : (2 * Math.tan(THREE.MathUtils.degToRad(c.fov || 50) / 2)) / H;   // метров или радиан на пиксель
+  let best = null;
+  for (const px of [7, 13]) {
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2, off = ux.clone().multiplyScalar(Math.cos(a) * px * perPx).addScaledVector(uy, Math.sin(a) * px * perPx);
+      if (ortho) ray.ray.origin.copy(o0).add(off); else ray.ray.direction.copy(d0).add(off).normalize();
+      const h = first(ray.intersectObjects(itemsG.children, true));
+      if (h && (!best || h.hit.distance < best.hit.distance)) best = h;
+    }
+    if (best) break;
   }
-  return null;
+  ray.ray.origin.copy(o0); ray.ray.direction.copy(d0);
+  return best;
 }
 
 // ───────────────────────── выделение и «ручки» ─────────────────────────
