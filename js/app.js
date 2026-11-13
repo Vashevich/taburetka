@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=79';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=80';
 
 const STORE = 'taburetka.project.v1';
 
@@ -765,6 +765,12 @@ function castScene(o, d, it) {          // первое, во что упира�
   }
   return null;
 }
+function planeHit(lr, C, N) {            // точка, где луч пересекает плоскость через C с нормалью N
+  const den = lr.d.dot(N);
+  if (Math.abs(den) < 1e-4) return null;
+  const t = C.clone().sub(lr.o).dot(N) / den;
+  return t > 0 ? lr.o.clone().addScaledVector(lr.d, t) : null;
+}
 function tiltAngle(lr, d) {              // угол курсора вокруг оси наклона: луч пересекает плоскость, перпендикулярную оси
   const den = lr.d.dot(d.A);
   if (Math.abs(den) < 1e-4) return null;
@@ -1259,6 +1265,26 @@ function addGumball(it) {
   const hub = part(0xffc21a, 0, 0);                         // точка в центре: обычное перетаскивание с магнитом
   put(hub, new THREE.SphereGeometry(0.085, 18, 12), 14);
   grip(hub, [0, 0, 0], { kind: 'grab' });
+  // Квадратики у самого центра, прилеплены к осям: перемещение сразу по двум осям. Заливка — переход между цветами этих осей.
+  const S = 0.42, planes = { y: ['x', 'z', (a, b) => [a, 0, b]], z: ['x', 'y', (a, b) => [a, b, 0]], x: ['z', 'y', (a, b) => [0, b, a]] };
+  for (const axis of ['y', 'z', 'x']) {
+    const [ua, ub, at] = planes[axis], pl = part(0xffffff, 0, 0), flip = new THREE.Group();
+    pl.userData.mat.vertexColors = true; pl.userData.mat.side = THREE.DoubleSide;
+    pl.add(flip);
+    pl.userData.flip = flip; pl.userData.axis = axis;
+    const ca = new THREE.Color(HCOL[ua]), cb = new THREE.Color(HCOL[ub]), mix = ca.clone().lerp(cb, 0.5);
+    const geo = new THREE.BufferGeometry().setFromPoints([[0, 0], [S, 0], [S, S], [0, 0], [S, S], [0, S]].map(([a, b]) => new THREE.Vector3(...at(a, b))));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute([mix, ca, mix, mix, mix, cb].flatMap((c) => [c.r, c.g, c.b]), 3));
+    const q = new THREE.Mesh(geo, pl.userData.mat);
+    q.renderOrder = 11;
+    flip.add(q);
+    for (const [a, b] of [[0.5, 0.5], [0.3, 0.7], [0.7, 0.3], [0.75, 0.75]]) {
+      const pk = new THREE.Object3D();
+      pk.position.set(...at(a * S, b * S));
+      pk.userData = { kind: 'plane', axis, arrow: pl };
+      flip.add(pk); handles.push(pk);
+    }
+  }
   // Дуги поворота, по одной на ось, цветом своей оси: синяя лежит между красной и зелёной стрелкой,
   // красная — между синей и зелёной, зелёная — между красной и синей.
   const R = 0.88, arcGeo = () => new THREE.TorusGeometry(R, 0.022, 8, 28, Math.PI / 2);
@@ -1763,6 +1789,13 @@ function beginDrag(lr, direct) {
       const dir = u.axis === 'x' ? new THREE.Vector3(c, 0, -sn) : u.axis === 'z' ? new THREE.Vector3(sn, 0, c) : AXES.y.clone();
       return { mode: 'axis', id: it.id, axis: u.axis, dir, a0, s0: axisParam(lr, a0, dir), x0: it.x, y0: it.y, z0: it.z };
     }
+    if (u && u.kind === 'plane' && !it.n) {   // квадратик: свободное перемещение в плоскости двух осей предмета
+      const c = Math.cos(it.rot), sn = Math.sin(it.rot), X = new THREE.Vector3(c, 0, -sn), Z = new THREE.Vector3(sn, 0, c);
+      const N = u.axis === 'y' ? AXES.y.clone() : u.axis === 'x' ? X : Z, C = new THREE.Vector3(it.x, it.y + it.h / 2, it.z);
+      const d = { mode: 'plane', id: it.id, axis: u.axis, N, C, U: u.axis === 'x' ? Z : X, x0: it.x, y0: it.y, z0: it.z };
+      d.p0 = planeHit(lr, C, N);
+      if (d.p0) return d;
+    }
     if (u && u.kind === 'grab')
       return { mode: 'move', handle: true, ...makeGrab(it, new THREE.Vector3(it.x, it.y + it.h / 2, it.z), false) };
     if (u && u.kind === 'rot' && u.axis !== 'y' && !it.n) {   // красная и зелёная дуги: наклон вокруг своей оси предмета
@@ -1907,6 +1940,21 @@ function updateDrag(d, lr) {
       it.y = r3(y);
     }
     if (it.y > restY(it, it.x, it.z) + 0.02) it.hold = 'free'; else delete it.hold;   // по осям можно оставить в воздухе
+    placeItem(it);
+    syncGizmo(it);
+  } else if (d.mode === 'plane') {
+    const p = planeHit(lr, d.C, d.N);
+    if (!p) return false;
+    const st = state.snap, sn = (v) => (st > 0 ? Math.round(v / st) * st : v), dv = p.sub(d.p0), a = sn(dv.dot(d.U));
+    it.x = r3(d.x0 + d.U.x * a); it.z = r3(d.z0 + d.U.z * a);
+    if (d.axis === 'y') { const Z = new THREE.Vector3(-d.U.z, 0, d.U.x), b = sn(dv.dot(Z)); it.x = r3(it.x + Z.x * b); it.z = r3(it.z + Z.z * b); }
+    else {                                // плоскость с вертикалью: вторая ось — высота
+      let y = sn(d.y0 + dv.y);
+      const H = ceilMin(it, it.x, it.z);
+      if (st > 0) { if (Math.abs(y) < 0.03) y = 0; if (Math.abs(y + it.h - H) < 0.06) y = H - it.h; }
+      it.y = r3(y);
+    }
+    if (it.y > restY(it, it.x, it.z) + 0.02) it.hold = 'free'; else delete it.hold;
     placeItem(it);
     syncGizmo(it);
   } else if (d.mode === 'tilt') {
