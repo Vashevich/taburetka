@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=71';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=72';
 
 const STORE = 'taburetka.project.v1';
 
@@ -40,7 +40,8 @@ const world = new THREE.Group();        // комната + мебель; в XR 
 const roomG = new THREE.Group(), itemsG = new THREE.Group(), dimsG = new THREE.Group(),
   tmpG = new THREE.Group(), gizmo = new THREE.Group();
 const autoG = new THREE.Group();        // габаритные размеры предметов: видны, пока в руке рулетка
-world.add(roomG, itemsG, dimsG, tmpG, autoG, gizmo);
+const tagsG = new THREE.Group();        // подписанные точки: видны сквозь всё
+world.add(roomG, itemsG, dimsG, tmpG, autoG, tagsG, gizmo);
 scene.add(world);
 
 scene.add(new THREE.HemisphereLight(0xffffff, 0xb8b0a0, 1.15));
@@ -68,7 +69,7 @@ ground.traverse((o) => { o.raycast = () => {}; });
 scene.add(ground);
 
 // ───────────────────────── состояние ─────────────────────────
-let state = { room: { w: 4, d: 5, h: 2.7, floor: '#d9c7a8', wall: '#f4f1ea' }, snap: 0.05, items: [], dims: [] };
+let state = { room: { w: 4, d: 5, h: 2.7, floor: '#d9c7a8', wall: '#f4f1ea' }, snap: 0.05, items: [], dims: [], tags: [] };
 const objs = new Map();                 // id → THREE.Group
 let selId = null, tool = 'select', view = '3d';
 let undoStack = [], redoStack = [], cur = '';
@@ -120,6 +121,7 @@ function normalize(d) {
     snap: num(d.snap, 0.05),
     grid: d.grid !== false,
     dims: Array.isArray(d.dims) ? d.dims.filter((m) => m && m.a && m.b) : [],
+    tags: Array.isArray(d.tags) ? d.tags.filter((m) => m && Array.isArray(m.a) && typeof m.t === 'string').map((m) => ({ ...m, t: m.t.slice(0, 60) })) : [],
     items: (Array.isArray(d.items) ? d.items : []).filter((i) => i && i.type && i.type !== 'model').map((i) => ({
       ...i, id: i.id || uid(), name: String(i.name || 'Предмет'),
       w: Math.max(0.01, num(i.w, 0.6)), d: Math.max(0.01, num(i.d, 0.6)), h: Math.max(0.005, num(i.h, 0.6)),
@@ -128,7 +130,7 @@ function normalize(d) {
   };
 }
 
-const serialize = () => JSON.stringify({ v: 1, room: state.room, snap: state.snap, grid: state.grid !== false, items: state.items, dims: state.dims });
+const serialize = () => JSON.stringify({ v: 1, room: state.room, snap: state.snap, grid: state.grid !== false, items: state.items, dims: state.dims, tags: state.tags });
 function save() { try { localStorage.setItem(STORE, cur); } catch { /* приватный режим */ } }
 function commit() {
   const s = serialize();
@@ -885,6 +887,7 @@ function addBlank(def) {
 }
 function removeItem(id) {
   const gone = item(id), riders = gone ? ridersOf(gone) : [];
+  state.tags = (state.tags || []).filter((m) => m.ai?.id !== id);          // теги на предмете уходят вместе с ним
   const nd = state.dims.filter((m) => m.ai?.id !== id && m.bi?.id !== id);   // размеры, привязанные к предмету, уходят вместе с ним
   const dimsGone = nd.length !== state.dims.length;
   state.dims = nd;
@@ -892,7 +895,7 @@ function removeItem(id) {
   if (g) { disposeChildren(g); itemsG.remove(g); objs.delete(id); }
   state.items = state.items.filter((i) => i.id !== id);
   shellDirty = true;
-  if (dimsGone) rebuildDims();
+  if (dimsGone) rebuildDims(); else rebuildTags();
   settle(riders);
   if (selId === id) select(null);
   commit();
@@ -1254,7 +1257,7 @@ function updateConstSize() {
   world.updateMatrixWorld(true);
   _winv.copy(world.matrixWorld).invert();
   const cl = world.worldToLocal(c.getWorldPosition(new THREE.Vector3()));
-  for (const g of [dimsG, tmpG, autoG]) for (const o of g.children) {
+  for (const g of [dimsG, tmpG, autoG, tagsG]) for (const o of g.children) {
     const k = g === autoG ? 0.5 : 1;     // габаритные размеры вдвое мельче поставленных вручную
     if (o.userData.bar) { const t = (inXR ? 0.004 : 0.0022 * viewHeightAt(o)) * k; o.scale.set(t, o.userData.len, t); continue; }
     if (o.userData.dot) { o.scale.setScalar((inXR ? 0.011 : 0.0058 * viewHeightAt(o)) * k); continue; }
@@ -1263,6 +1266,11 @@ function updateConstSize() {
     o.scale.set(s * o.userData.aspect, s, 1);
     if (inXR) { o.rotation.set(0, Math.atan2(cl.x - o.position.x, cl.z - o.position.z), 0); continue; }
     const A = o.userData.a, B = o.userData.b;
+    if (o.userData.tagP) {               // подпись тега: лицом к зрителю, чуть выше своей точки
+      o.quaternion.copy(c.quaternion);
+      o.position.copy(o.userData.tagP).addScaledVector(_up.set(0, 1, 0).applyQuaternion(c.quaternion).transformDirection(_winv), s * 0.95);
+      continue;
+    }
     if (!A || !B) { o.quaternion.copy(c.quaternion); continue; }
     // На экране: табличка повёрнута вдоль линии размера и уходит по ней в сторону, если закрывает ручку гамбола.
     const W = canvas.clientWidth / 2, Hh = canvas.clientHeight / 2;
@@ -1316,22 +1324,22 @@ const DIM_ = DIM, DIMA = new THREE.MeshBasicMaterial({ color: 0x1b1a18 });   // 
 const BAR_GEO = new THREE.CylinderGeometry(1, 1, 1, 8), DOT_GEO = new THREE.SphereGeometry(1, 14, 10);
 let measureA = null;
 const LABEL_GEO = new THREE.PlaneGeometry(1, 1);
-function makeLabel(text, auto) {
+function makeLabel(text, auto, tag) {
   const c = document.createElement('canvas'), x = c.getContext('2d'), font = 'bold 40px "PT Mono", ui-monospace, monospace';
   x.font = font;
   c.width = Math.ceil(x.measureText(text).width) + 32;
   c.height = 64;
   x.font = font;
-  x.fillStyle = '#F3EAD4';
+  x.fillStyle = tag ? '#ffc21a' : '#F3EAD4';
   x.beginPath();
   x.rect(3, 3, c.width - 6, 58);
   x.fill();
-  x.strokeStyle = auto ? '#1b1a18' : '#A61E1E'; x.lineWidth = 6; x.stroke();
+  x.strokeStyle = auto || tag ? '#1b1a18' : '#A61E1E'; x.lineWidth = 6; x.stroke();
   x.fillStyle = '#1d1d1b'; x.textAlign = 'center'; x.textBaseline = 'middle';
   x.fillText(text, c.width / 2, 34);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const sp = new THREE.Mesh(LABEL_GEO, new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide }));
+  const sp = new THREE.Mesh(LABEL_GEO, new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide, depthTest: !tag }));
   sp.userData = { label: true, aspect: c.width / c.height };
   sp.renderOrder = 20;
   sp.raycast = () => {};
@@ -1391,7 +1399,7 @@ function clearGroup(g) {
   for (const c of [...g.children]) {
     g.remove(c);
     if (c.geometry !== LABEL_GEO && c.geometry !== BAR_GEO && c.geometry !== DOT_GEO) c.geometry?.dispose();
-    if (c.material !== DIM && c.material !== DIMA) { c.material?.map?.dispose(); c.material?.dispose(); }
+    if (c.material !== DIM && c.material !== DIMA && c.material !== TAGM) { c.material?.map?.dispose(); c.material?.dispose(); }
   }
 }
 // Конец размера может быть привязан к предмету: at = { id, l } — точка в долях его габарита.
@@ -1419,6 +1427,56 @@ function dimEnd(m, k) {
 function rebuildDims() {
   clearGroup(dimsG);
   for (const m of state.dims) dimObjects(dimsG, dimEnd(m, 'a'), dimEnd(m, 'b'));
+  rebuildTags();
+}
+// Теги: точка с подписью. Привязаны к углу предмета так же, как концы размеров, и видны сквозь мебель и стены.
+const TAGM = new THREE.MeshBasicMaterial({ color: 0xffc21a, depthTest: false, transparent: true });
+function rebuildTags() {
+  clearGroup(tagsG);
+  for (const m of state.tags || []) {
+    const p = dimEnd(m, 'a'), dot = new THREE.Mesh(DOT_GEO, TAGM);
+    dot.position.copy(p);
+    dot.userData = { dot: true };
+    dot.renderOrder = 21;
+    dot.raycast = () => {};
+    const lab = makeLabel(m.t, false, true);
+    lab.position.copy(p);
+    lab.userData.tagP = p.clone();
+    lab.renderOrder = 22;
+    tagsG.add(dot, lab);
+  }
+}
+let tagBox = null;                      // поле ввода подписи прямо у точки (окна prompt во встроенном браузере не работают)
+function askTag(x, y, text, done) {
+  if (tagBox) tagBox.remove();
+  const el = tagBox = document.createElement('input');
+  el.value = text; el.maxLength = 60; el.placeholder = 'Подпись';
+  el.style.cssText = `position:fixed;left:${Math.min(x + 12, innerWidth - 230)}px;top:${Math.max(8, y - 16)}px;width:210px;z-index:60;font:16px "PT Sans",sans-serif;padding:6px 8px;border:2px solid #1b1a18;background:#ffc21a;color:#1b1a18;box-shadow:4px 4px 0 #1b1a18;outline:none`;
+  document.body.append(el);
+  let over = false;
+  const end = (ok) => { if (over) return; over = true; const v = el.value.trim(); el.remove(); if (tagBox === el) tagBox = null; if (ok) done(v); };
+  el.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') end(true); else if (e.key === 'Escape') end(false); });
+  el.addEventListener('blur', () => end(true));
+  setTimeout(() => { el.focus(); el.select(); }, 0);
+}
+function tagAt() {                       // тег под курсором
+  world.updateMatrixWorld(true);
+  let best = -1, bd = coarse ? 30 : 18;
+  (state.tags || []).forEach((m, i) => { const d = pxDist(dimEnd(m, 'a')); if (d < bd) { bd = d; best = i; } });
+  return best;
+}
+function tagTap(e) {
+  const i = tagAt(), xr = renderer.xr.isPresenting;
+  if (i >= 0 && !xr) {                   // нажатие по готовому тегу — правка подписи; пустая подпись удаляет тег
+    askTag(e.clientX, e.clientY, state.tags[i].t, (v) => { if (v) state.tags[i].t = v; else state.tags.splice(i, 1); rebuildTags(); commit(); });
+    return;
+  }
+  const m = measurePoint();
+  if (!m) return;
+  const tag = { a: m.p.toArray().map(r3), t: '' }, at = attachOf(m.p, m.id, m.n);
+  if (at) tag.ai = at;
+  const put = (v) => { if (!v) return; tag.t = v; state.tags.push(tag); rebuildTags(); commit(); };
+  if (xr) put(`Метка ${state.tags.length + 1}`); else askTag(e.clientX, e.clientY, '', put);
 }
 function refreshDims(id) {
   if (state.dims.some((m) => m.ai?.id === id || m.bi?.id === id)) rebuildDims();
@@ -1433,6 +1491,8 @@ eraseBox.visible = false;
 eraseBox.raycast = () => {};
 world.add(eraseBox);
 function eraseTarget() {
+  const ti = tagAt();
+  if (ti >= 0) return { tag: ti };
   const pk = pickItem();
   if (pk) return { id: pk.id };
   world.updateMatrixWorld(true);
@@ -1459,7 +1519,8 @@ function showErase(t) {
 }
 function doErase(t) {
   if (!t) return;
-  if (t.id) removeItem(t.id);
+  if (t.tag !== undefined) { state.tags.splice(t.tag, 1); rebuildTags(); commit(); }
+  else if (t.id) removeItem(t.id);
   else { state.dims.splice(t.dim, 1); rebuildDims(); commit(); }
   showErase(null);
 }
@@ -1568,7 +1629,7 @@ function onDown(e) {
   down = null;
   if (e.button !== 0) return;
   down = { pid: e.pointerId, x: e.clientX, y: e.clientY, multi: false, moved: false, noTap: false, wasSel: selId };
-  if (tool === 'measure' || tool === 'act' || tool === 'erase') return;
+  if (tool === 'measure' || tool === 'tag' || tool === 'act' || tool === 'erase') return;
   setRay(e);
   const d = beginDrag(localRay(ray.ray), e.pointerType === 'mouse');
   if (d) { if (d.mode !== 'move' || d.handle) down.noTap = true; startDrag(d, e); }
@@ -1870,7 +1931,7 @@ function onMove(e) {
     if (tool === 'room') showCut(hh ? null : findCut());
   }
   if (tool === 'erase' && e.pointerType === 'mouse' && !(down && down.moved)) { setRay(e); showErase(eraseTarget()); }
-  if (tool === 'measure' && e.pointerType === 'mouse' && !(down && down.moved)) {
+  if ((tool === 'measure' || tool === 'tag') && e.pointerType === 'mouse' && !(down && down.moved)) {
     setRay(e);
     const m = measurePoint(), was = snapKind;
     showSnap(m);
@@ -1898,6 +1959,7 @@ function onUp(e) {
 function onTap(e, dn) {
   setRay(e);
   if (tool === 'measure') { measureTap(); return; }
+  if (tool === 'tag') { tagTap(e); return; }
   if (tool === 'erase') { doErase(eraseTarget()); return; }
   if (tool === 'room') {                // нажатие по ребру — излом; мимо всего — снять выделение
     tapCut();
@@ -1954,6 +2016,7 @@ const HINTS = {
   erase: 'Ластик: наведите на предмет или размер — он станет красным — и нажмите, чтобы удалить',
   act: 'Жёлтые рамки показывают, что можно открыть, выдвинуть или разложить — нажимайте на них',
   measure: 'Рулетка: укажите первую точку — липнет к углам',
+  tag: 'Тег: нажмите на точку и напишите подпись; нажатие по готовому тегу — правка, ластик удаляет',
 };
 function updateStatus() {
   const it = sel();
@@ -1975,6 +2038,7 @@ const makeCursors = () => {
   return {
     select: svg(two('M5 3l14 8-6 2-2 6z', 'translate(6 6) scale(1.15)', '#F6EEDB') + two('M11.5 2v4M3 9.5h4M5 3.5l2.6 2.6', ''), 12, 9),
     measure: svg(cross + two(icon('measure'), 'translate(13 13) scale(0.9)', '#F6EEDB'), 7, 7),
+    tag: svg(cross + two(icon('tag'), 'translate(13 13) scale(0.9)', '#ffc21a'), 7, 7),
     erase: svg(two(icon('erase'), 'translate(2 2) scale(1.3)', '#F6EEDB'), 11, 28),
     act: svg(two(icon('act'), 'translate(2 1) scale(1.35)', '#F6EEDB'), 16, 6),
     room: svg(cross + two(icon('room'), 'translate(13 13) scale(0.9)', '#F6EEDB'), 7, 7),
@@ -2322,6 +2386,7 @@ scene.add(tpMarker);
 const TOOLS = [
   ['select', 'Выбор', 'M5 3l14 8-6 2-2 6z'],
   ['measure', 'Рулетка', 'M3 16L16 3l5 5L8 21zM7 12l2 2M10 9l2 2M13 6l2 2'],
+  ['tag', 'Тег', 'M4 12V4h8l8 8-8 8zM8.5 8.5h.01'],
   ['erase', 'Ластик', 'M8 21h12M5.6 14.4l8-8a2 2 0 0 1 2.8 0l3.2 3.2a2 2 0 0 1 0 2.8L12 20H8.5l-2.9-2.8a2 2 0 0 1 0-2.8zM10 10l6 6'],
   ['act', 'Действие', 'M9 12V5a1.5 1.5 0 0 1 3 0v5.5m0-1a1.5 1.5 0 0 1 3 0V11m0-.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-1a6 6 0 0 1-5-2.6L4.6 15a1.5 1.5 0 0 1 2.5-1.7L9 15.5'],
   ['room', 'Комната', 'M3 21V9l9-6 9 6v12zM3 9l9 5 9-5M12 14v7'],
@@ -2640,6 +2705,7 @@ function xrSelectStart(c, R) {
   if (tw.by) return;
   ray.ray.copy(R);
   if (tool === 'measure') { measureTap(); return; }
+  if (tool === 'tag') { tagTap({ clientX: 0, clientY: 0 }); return; }
   if (tool === 'erase') { doErase(eraseTarget()); return; }
   if (tool === 'act') { const pk = pickItem(); if (pk) tapPart(pk); return; }
   const d = beginDrag(localRay(R), false);
