@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=77';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=78';
 
 const STORE = 'taburetka.project.v1';
 
@@ -1325,13 +1325,13 @@ function updateConstSize() {
       }
     }
     const L = o.userData.lift ? ownL : 0;
-    if (L && o.userData.bar) {           // «свой» размер рисуется ближе к зрителю вдоль луча взгляда: на экране он там же, но поверх своего предмета
+    if (o.userData.lift && o.userData.bar) {           // «свой» размер рисуется ближе к зрителю вдоль луча взгляда: на экране он там же, но поверх своего предмета
       const a = liftPt(o.userData.a0, L, cl, c, _la), b = liftPt(o.userData.b0, L, cl, c, _lb), len = a.distanceTo(b);
       o.position.copy(a).add(b).multiplyScalar(0.5);
       if (len > 1e-6) o.quaternion.setFromUnitVectors(THREE.Object3D.DEFAULT_UP, _x.copy(b).sub(a).multiplyScalar(1 / len));
       o.userData.len = len;
     }
-    if (L && o.userData.dot) liftPt(o.userData.p0, L, cl, c, o.position);
+    if (o.userData.lift && o.userData.dot) liftPt(o.userData.p0, L, cl, c, o.position);
     if (o.userData.bar) { const t = (inXR ? 0.004 : 0.0022 * viewHeightAt(o)) * k; o.scale.set(t, o.userData.len, t); continue; }
     if (o.userData.dot) { o.scale.setScalar((inXR ? 0.011 : 0.0058 * viewHeightAt(o)) * k); continue; }
     if (!o.userData.label) continue;
