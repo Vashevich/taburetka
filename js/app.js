@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=69';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=70';
 
 const STORE = 'taburetka.project.v1';
 
@@ -526,14 +526,18 @@ function placeItem(it) {
   if (!g) return;
   g.position.set(it.x, it.y || 0, it.z);
   if (it.n) { const fr = itemFrame(it); g.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(fr.X, fr.Y, fr.N)); }
-  else g.rotation.set(0, it.rot || 0, 0);
+  else if (it.q) {                      // наклон (красная и зелёная дуги гамбола): поворот вокруг середины предмета
+    g.quaternion.setFromAxisAngle(AXES.y, it.rot || 0).multiply(new THREE.Quaternion(...it.q));
+    const up = new THREE.Vector3(0, it.h / 2, 0);
+    g.position.add(up).sub(up.clone().applyQuaternion(g.quaternion));
+  } else g.rotation.set(0, it.rot || 0, 0);
   if (it.embed || EMBED_T.has(it.type)) shellDirty = true;
 }
 function syncGizmo(it) {                 // рамка и гамбол следуют за предметом, в том числе за наклонным
   if (tool === 'room') return;
   const g = objs.get(it.id);
   gizmo.position.set(it.x, it.y || 0, it.z);
-  if (g) gizmo.quaternion.copy(g.quaternion);
+  if (g) { gizmo.quaternion.copy(g.quaternion); if (it.q) gizmo.position.copy(g.position); }
 }
 function makeItemObj(it) {
   const g = new THREE.Group();
@@ -723,6 +727,14 @@ function castScene(o, d, it) {          // первое, во что упира�
     return { p: world.worldToLocal(h.point.clone()), n, room, q };
   }
   return null;
+}
+function tiltAngle(lr, d) {              // угол курсора вокруг оси наклона: луч пересекает плоскость, перпендикулярную оси
+  const den = lr.d.dot(d.A);
+  if (Math.abs(den) < 1e-4) return null;
+  const t = d.C.clone().sub(lr.o).dot(d.A) / den;
+  if (t <= 0) return null;
+  const p = lr.o.clone().addScaledVector(lr.d, t).sub(d.C);
+  return Math.atan2(p.dot(d.V), p.dot(d.U));
 }
 function castShell(o, d) {              // во что упирается луч на оболочке комнаты: точка и нормаль грани
   if (!wallMesh) return null;
@@ -1150,7 +1162,7 @@ function updateGizmo() {
   if (!it) return;
   gizmo.position.set(it.x, it.y, it.z);
   gizmo.rotation.set(0, it.rot || 0, 0);
-  if (it.n && objs.get(it.id)) gizmo.quaternion.copy(objs.get(it.id).quaternion);
+  if ((it.n || it.q) && objs.get(it.id)) { gizmo.quaternion.copy(objs.get(it.id).quaternion); if (it.q) gizmo.position.copy(objs.get(it.id).position); }
   const box = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(it.w + 0.012, it.h + 0.012, it.d + 0.012)), SEL);
   box.position.y = it.h / 2;
   box.renderOrder = 10;
@@ -1197,24 +1209,30 @@ function addGumball(it) {
   const grip = (a, pos, data) => { const pk = new THREE.Object3D(); pk.position.set(...pos); pk.userData = { ...data, arrow: a }; a.add(pk); handles.push(pk); };
   for (const [axis, rx, rz] of [['x', 0, -Math.PI / 2], ['y', 0, 0], ['z', Math.PI / 2, 0]]) {
     const ar = part(HCOL[axis], rx, rz);                    // стрелка: перемещение вдоль оси
-    put(ar, new THREE.CylinderGeometry(0.018, 0.018, 1, 8).translate(0, 0.5, 0));
-    put(ar, new THREE.ConeGeometry(0.07, 0.22, 16).translate(0, 1.1, 0));
-    for (const t of [0.45, 0.8, 1.1]) grip(ar, [0, t, 0], { kind: 'move', axis });
-    const sc = part(HCOL[axis], rx, rz);                    // кубик за стрелкой: тянуть эту сторону
-    put(sc, new THREE.BoxGeometry(0.1, 0.1, 0.1).translate(0, 1.5, 0), 13);
-    grip(sc, [0, 1.5, 0], { kind: 'scale', axis, sign: 1 });
+    put(ar, new THREE.CylinderGeometry(0.018, 0.018, 1.36, 8).translate(0, 0.68, 0));
+    put(ar, new THREE.ConeGeometry(0.075, 0.24, 16).translate(0, 1.48, 0));
+    for (const t of [1.12, 1.3, 1.5]) grip(ar, [0, t, 0], { kind: 'move', axis });
+    const sc = part(HCOL[axis], rx, rz);                    // кубик отдельно, с зазором за стрелкой: тянуть эту сторону
+    put(sc, new THREE.BoxGeometry(0.12, 0.12, 0.12).translate(0, 1.95, 0), 13);
+    grip(sc, [0, 1.95, 0], { kind: 'scale', axis, sign: 1 });
     if (axis === 'y') continue;
-    const sb = part(HCOL[axis], rx, rz);                    // кубик с обратной стороны: тянуть противоположную грань
-    put(sb, new THREE.CylinderGeometry(0.012, 0.012, 0.6, 6).translate(0, -0.3, 0));
-    put(sb, new THREE.BoxGeometry(0.1, 0.1, 0.1).translate(0, -0.62, 0), 13);
-    grip(sb, [0, -0.62, 0], { kind: 'scale', axis, sign: -1 });
+    const sb = part(HCOL[axis], rx, rz);                    // кубик с обратной стороны, тоже отдельно: тянуть противоположную грань
+    put(sb, new THREE.CylinderGeometry(0.012, 0.012, 0.5, 6).translate(0, -0.25, 0));
+    put(sb, new THREE.BoxGeometry(0.12, 0.12, 0.12).translate(0, -0.8, 0), 13);
+    grip(sb, [0, -0.8, 0], { kind: 'scale', axis, sign: -1 });
   }
-  const hub = part(0xffc21a, 0, 0);                         // шарик в центре: обычное перетаскивание с магнитом
+  const hub = part(0xffc21a, 0, 0);                         // точка в центре: обычное перетаскивание с магнитом
   put(hub, new THREE.SphereGeometry(0.085, 18, 12), 14);
   grip(hub, [0, 0, 0], { kind: 'grab' });
-  const arc = part(HCOL.y, 0, 0);                           // дуга между красной и зелёной стрелкой: поворот
-  put(arc, new THREE.TorusGeometry(0.72, 0.02, 8, 28, Math.PI / 2).rotateX(Math.PI / 2));
-  for (const a of [16, 24, 32, 40, 48, 56, 64, 72]) { const r = THREE.MathUtils.degToRad(a); grip(arc, [0.72 * Math.cos(r), 0, 0.72 * Math.sin(r)], { kind: 'rot' }); }
+  // Дуги поворота, по одной на ось, цветом своей оси: синяя лежит между красной и зелёной стрелкой,
+  // красная — между синей и зелёной, зелёная — между красной и синей.
+  const R = 0.88, arcGeo = () => new THREE.TorusGeometry(R, 0.022, 8, 28, Math.PI / 2);
+  const arcs = { y: [arcGeo().rotateX(Math.PI / 2), (c, sn) => [c, 0, sn]], x: [arcGeo().rotateY(-Math.PI / 2), (c, sn) => [0, sn, c]], z: [arcGeo(), (c, sn) => [c, sn, 0]] };
+  for (const axis of ['y', 'x', 'z']) {
+    const arc = part(HCOL[axis], 0, 0);
+    put(arc, arcs[axis][0]);
+    for (const a of [20, 30, 40, 50, 60, 70]) { const r = THREE.MathUtils.degToRad(a); grip(arc, arcs[axis][1](R * Math.cos(r), R * Math.sin(r)), { kind: 'rot', axis }); }
+  }
 }
 // высота видимой области (в единицах world) на расстоянии объекта — для элементов постоянного экранного размера
 function viewHeightAt(obj) {
@@ -1591,6 +1609,14 @@ function beginDrag(lr, direct) {
     }
     if (u && u.kind === 'grab')
       return { mode: 'move', handle: true, ...makeGrab(it, new THREE.Vector3(it.x, it.y + it.h / 2, it.z), false) };
+    if (u && u.kind === 'rot' && u.axis !== 'y' && !it.n) {   // красная и зелёная дуги: наклон вокруг своей оси предмета
+      const g = objs.get(it.id), al = new THREE.Vector3(u.axis === 'x' ? 1 : 0, 0, u.axis === 'z' ? 1 : 0);
+      const A = al.clone().applyQuaternion(g.quaternion).normalize(), C = new THREE.Vector3(0, it.h / 2, 0).applyQuaternion(g.quaternion).add(g.position);
+      const U = new THREE.Vector3().crossVectors(A, Math.abs(A.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : AXES.y).normalize(), V = new THREE.Vector3().crossVectors(A, U);
+      const d = { mode: 'tilt', id: it.id, al, A, C, U, V, q0: it.q ? new THREE.Quaternion(...it.q) : new THREE.Quaternion() };
+      d.a0 = tiltAngle(lr, d);
+      if (d.a0 !== null) return d;
+    }
     if (u && u.kind === 'rot') {
       const py = it.y + it.h / 2, p = hitPlaneY(lr, py);
       if (p) return { mode: 'rotate', id: it.id, py, a0: Math.atan2(p.x - it.x, p.z - it.z), rot0: it.rot };
@@ -1725,6 +1751,13 @@ function updateDrag(d, lr) {
       it.y = r3(y);
     }
     if (it.y > restY(it, it.x, it.z) + 0.02) it.hold = 'free'; else delete it.hold;   // по осям можно оставить в воздухе
+    placeItem(it);
+    syncGizmo(it);
+  } else if (d.mode === 'tilt') {
+    const a = tiltAngle(lr, d);
+    if (a === null) return false;
+    const q = d.q0.clone().multiply(new THREE.Quaternion().setFromAxisAngle(d.al, snapRot(a - d.a0)));
+    if (Math.abs(q.w) > 0.99995) delete it.q; else it.q = q.toArray().map((v) => Math.round(v * 1e4) / 1e4);   // вернули ровно — наклона нет
     placeItem(it);
     syncGizmo(it);
   } else if (d.mode === 'rotate') {
