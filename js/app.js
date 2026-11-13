@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=78';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=79';
 
 const STORE = 'taburetka.project.v1';
 
@@ -1264,9 +1264,19 @@ function addGumball(it) {
   const R = 0.88, arcGeo = () => new THREE.TorusGeometry(R, 0.022, 8, 28, Math.PI / 2);
   const arcs = { y: [arcGeo().rotateX(Math.PI / 2), (c, sn) => [c, 0, sn]], x: [arcGeo().rotateY(-Math.PI / 2), (c, sn) => [0, sn, c]], z: [arcGeo(), (c, sn) => [c, sn, 0]] };
   for (const axis of ['y', 'x', 'z']) {
-    const arc = part(HCOL[axis], 0, 0);
-    put(arc, arcs[axis][0]);
-    for (const a of [20, 30, 40, 50, 60, 70]) { const r = THREE.MathUtils.degToRad(a); grip(arc, arcs[axis][1](R * Math.cos(r), R * Math.sin(r)), { kind: 'rot', axis }); }
+    const arc = part(HCOL[axis], 0, 0), flip = new THREE.Group();   // flip зеркалит дугу в ту четверть, что обращена к зрителю
+    arc.userData.mat.side = THREE.DoubleSide;
+    arc.add(flip);
+    arc.userData.flip = flip; arc.userData.axis = axis;
+    const q = new THREE.Mesh(arcs[axis][0], arc.userData.mat);
+    q.renderOrder = 12;
+    flip.add(q);
+    for (const a of [20, 30, 40, 50, 60, 70]) {
+      const r = THREE.MathUtils.degToRad(a), pk = new THREE.Object3D();
+      pk.position.set(...arcs[axis][1](R * Math.cos(r), R * Math.sin(r)));
+      pk.userData = { kind: 'rot', axis, arrow: arc };
+      flip.add(pk); handles.push(pk);
+    }
   }
 }
 // высота видимой области (в единицах world) на расстоянии объекта — для элементов постоянного экранного размера
@@ -1303,7 +1313,15 @@ function depthIn(it, p, cl, c) {
 }
 function updateConstSize() {
   for (const h of handles) if (h.userData.cs) h.scale.setScalar(h.userData.cs * viewHeightAt(h));
-  for (const a of arrows) a.scale.setScalar((coarse ? 0.16 : 0.12) * (a.userData.gb ? 0.5 : 1) * viewHeightAt(a));   // гамбол вдвое меньше стрелок комнаты
+  let camW = null;
+  for (const a of arrows) {
+    a.scale.setScalar((coarse ? 0.16 : 0.12) * (a.userData.gb ? 0.5 : 1) * viewHeightAt(a));   // гамбол вдвое меньше стрелок комнаты
+    if (!a.userData.flip) continue;      // дуга поворота переходит в четверть, обращённую к зрителю
+    camW = camW || (renderer.xr.isPresenting ? camera : cam()).getWorldPosition(new THREE.Vector3());
+    a.updateWorldMatrix(true, false);
+    const v = a.worldToLocal(_m1.copy(camW)), sx = v.x < 0 ? -1 : 1, sy = v.y < 0 ? -1 : 1, sz = v.z < 0 ? -1 : 1, ax = a.userData.axis;
+    a.userData.flip.scale.set(ax === 'x' ? 1 : sx, ax === 'y' ? 1 : sy, ax === 'z' ? 1 : sz);
+  }
   for (const cm2 of [cutMarker, cutMarkerA]) if (cm2.visible) cm2.scale.setScalar((coarse ? 0.014 : 0.009) * viewHeightAt(cm2));
   if (snapMarker.visible) snapMarker.scale.setScalar((snapMarker.userData.cs || 0.01) * viewHeightAt(snapMarker));
   // Таблички размеров: на экране — постоянный экранный размер, лицом к камере;
