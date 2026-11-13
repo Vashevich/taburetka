@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=64';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=65';
 
 const STORE = 'taburetka.project.v1';
 
@@ -823,6 +823,7 @@ function spawnXZ() {
 }
 
 function addItemData(it) {
+  if (tool !== 'select') setTool('select');   // новая мебель сразу в руке у «Выбора»
   let [x, z] = spawnXZ();
   if (!renderer.xr.isPresenting) {
     const f = footprint(it), R = state.room;
@@ -2018,7 +2019,7 @@ $('#btnPlan').onclick = () => setView('plan');
 // каталог
 const catalogEl = $('#catalog');
 function toggleCatalog(show = catalogEl.hidden) { catalogEl.hidden = !show; }
-$('#btnAdd').onclick = () => toggleCatalog();
+$('#btnAdd').onclick = () => { if (tool !== 'select') setTool('select'); toggleCatalog(); };   // «Мебель» всегда переводит в «Выбор»
 $('#catClose').onclick = () => toggleCatalog(false);
 function afterAdd() { if (innerWidth <= 640 || renderer.xr.isPresenting) toggleCatalog(false); }
 let blankThumbs = {};
