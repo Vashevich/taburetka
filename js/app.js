@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=66';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=67';
 
 const STORE = 'taburetka.project.v1';
 
@@ -1189,7 +1189,7 @@ function addGumball(it) {
     put(sb, new THREE.BoxGeometry(0.1, 0.1, 0.1).translate(0, -0.62, 0), 13);
     grip(sb, [0, -0.62, 0], { kind: 'scale', axis, sign: -1 });
   }
-  const hub = part(0xf3ead4, 0, 0);                         // шарик в центре: обычное перетаскивание с магнитом
+  const hub = part(0xffc21a, 0, 0);                         // шарик в центре: обычное перетаскивание с магнитом
   put(hub, new THREE.SphereGeometry(0.085, 18, 12), 14);
   const rim = new THREE.Mesh(new THREE.SphereGeometry(0.105, 18, 12), new THREE.MeshBasicMaterial({ color: 0x1b1a18, side: THREE.BackSide, depthTest: false, transparent: true }));
   rim.renderOrder = 13;
