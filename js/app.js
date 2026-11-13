@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=74';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=75';
 
 const STORE = 'taburetka.project.v1';
 
@@ -1246,18 +1246,15 @@ function addGumball(it) {
   const put = (a, geo, ro = 12) => { const q = new THREE.Mesh(geo, a.userData.mat); q.renderOrder = ro; a.add(q); };
   const grip = (a, pos, data) => { const pk = new THREE.Object3D(); pk.position.set(...pos); pk.userData = { ...data, arrow: a }; a.add(pk); handles.push(pk); };
   for (const [axis, rx, rz] of [['x', 0, -Math.PI / 2], ['y', 0, 0], ['z', Math.PI / 2, 0]]) {
-    const ar = part(HCOL[axis], rx, rz);                    // стрелка: перемещение вдоль оси
-    put(ar, new THREE.CylinderGeometry(0.018, 0.018, 1.36, 8).translate(0, 0.68, 0));
+    const ar = part(HCOL[axis], rx, rz);                    // стрелка: перемещение вдоль оси; хвост назад той же длины и толщины
+    put(ar, new THREE.CylinderGeometry(0.018, 0.018, 2.72, 8));
     put(ar, new THREE.ConeGeometry(0.075, 0.24, 16).translate(0, 1.48, 0));
-    for (const t of [1.12, 1.3, 1.5]) grip(ar, [0, t, 0], { kind: 'move', axis });
-    const sc = part(HCOL[axis], rx, rz);                    // кубик отдельно, с зазором за стрелкой: тянуть эту сторону
-    put(sc, new THREE.BoxGeometry(0.12, 0.12, 0.12).translate(0, 1.95, 0), 13);
-    grip(sc, [0, 1.95, 0], { kind: 'scale', axis, sign: 1 });
-    if (axis === 'y') continue;
-    const sb = part(HCOL[axis], rx, rz);                    // кубик с обратной стороны, тоже отдельно: тянуть противоположную грань
-    put(sb, new THREE.CylinderGeometry(0.012, 0.012, 0.5, 6).translate(0, -0.25, 0));
-    put(sb, new THREE.BoxGeometry(0.12, 0.12, 0.12).translate(0, -0.8, 0), 13);
-    grip(sb, [0, -0.8, 0], { kind: 'scale', axis, sign: -1 });
+    for (const t of [-1.3, -1.12, 1.12, 1.3, 1.5]) grip(ar, [0, t, 0], { kind: 'move', axis });
+    for (const sign of [1, -1]) {                           // кубики с обеих сторон на одном расстоянии: тянуть эту сторону
+      const sc = part(HCOL[axis], rx, rz);
+      put(sc, new THREE.BoxGeometry(0.12, 0.12, 0.12).translate(0, sign * 1.95, 0), 13);
+      grip(sc, [0, sign * 1.95, 0], { kind: 'scale', axis, sign });
+    }
   }
   const hub = part(0xffc21a, 0, 0);                         // точка в центре: обычное перетаскивание с магнитом
   put(hub, new THREE.SphereGeometry(0.085, 18, 12), 14);
@@ -1697,7 +1694,7 @@ function beginDrag(lr, direct) {
     }
     if (u && u.kind === 'scale')
       return { mode: 'pull', riders: ridersOf(it), id: it.id, axis: u.axis, sign: u.sign, rot: it.rot,
-        w0: it.w, d0: it.d, h0: it.h, x0: it.x, z0: it.z, hy: it.y + it.h / 2 };
+        w0: it.w, d0: it.d, h0: it.h, x0: it.x, z0: it.z, y0: it.y, hy: it.y + it.h / 2 };
     if (u && u.kind === 'move') {
       const a0 = new THREE.Vector3(it.x, it.y + it.h / 2, it.z), c = Math.cos(it.rot), sn = Math.sin(it.rot);
       const dir = u.axis === 'x' ? new THREE.Vector3(c, 0, -sn) : u.axis === 'z' ? new THREE.Vector3(sn, 0, c) : AXES.y.clone();
@@ -1930,9 +1927,11 @@ function applyPull(it, d, lr) {
     if (!(t > 0)) return false;
     const yy = lr.o.y + lr.d.y * t;
     if (d.l0 === undefined) { d.l0 = yy; return false; }   // тянем от места захвата, без прыжка
-    const nh = snapLen(Math.max(0.01, d.h0 + yy - d.l0));
+    let nh = snapLen(Math.max(0.01, d.h0 + d.sign * (yy - d.l0)));
+    if (d.sign < 0 && d.y0 !== undefined) nh = Math.min(nh, d.h0 + Math.max(0, d.y0 - floorAt(d.x0, d.z0)));   // ниже пола не тянется
     f = nh / d.h0;
     it.h = r3(nh);
+    if (d.sign < 0 && d.y0 !== undefined) it.y = r3(d.y0 - (nh - d.h0));   // нижний кубик: низ едет, верх на месте
     if (it.keep) { it.w = r3(d.w0 * f); it.d = r3(d.d0 * f); }
     return true;
   }
