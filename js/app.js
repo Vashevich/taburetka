@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=63';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=64';
 
 const STORE = 'taburetka.project.v1';
 
@@ -1139,6 +1139,46 @@ function addSeatHandle(it, seat) {
     new THREE.LineBasicMaterial({ color: HCOL.y, depthTest: false, transparent: true }));
   loop.renderOrder = 11;
   gizmo.add(loop);
+}
+// Гамбол, как в Rhino: в одном месте стрелки перемещения, кубики растяжения и дуга поворота.
+// Оси — самого предмета; всё постоянного размера на экране.
+function addGumball(it) {
+  const hold = new THREE.Group();
+  hold.position.y = it.h / 2;
+  gizmo.add(hold);
+  const part = (col, rx, rz) => {
+    const a = new THREE.Group(), m = new THREE.MeshBasicMaterial({ color: col, depthTest: false, transparent: true });
+    a.rotation.set(rx, 0, rz);
+    a.userData = { mat: m, col, gb: true };
+    hold.add(a);
+    arrows.push(a);
+    return a;
+  };
+  const put = (a, geo, ro = 12) => { const q = new THREE.Mesh(geo, a.userData.mat); q.renderOrder = ro; a.add(q); };
+  const grip = (a, pos, data) => { const pk = new THREE.Object3D(); pk.position.set(...pos); pk.userData = { ...data, arrow: a }; a.add(pk); handles.push(pk); };
+  for (const [axis, rx, rz] of [['x', 0, -Math.PI / 2], ['y', 0, 0], ['z', Math.PI / 2, 0]]) {
+    const ar = part(HCOL[axis], rx, rz);                    // стрелка: перемещение вдоль оси
+    put(ar, new THREE.CylinderGeometry(0.018, 0.018, 1, 8).translate(0, 0.5, 0));
+    put(ar, new THREE.ConeGeometry(0.07, 0.22, 16).translate(0, 1.1, 0));
+    for (const t of [0.45, 0.8, 1.1]) grip(ar, [0, t, 0], { kind: 'move', axis });
+    const sc = part(HCOL[axis], rx, rz);                    // кубик за стрелкой: тянуть эту сторону
+    put(sc, new THREE.BoxGeometry(0.1, 0.1, 0.1).translate(0, 1.5, 0), 13);
+    grip(sc, [0, 1.5, 0], { kind: 'scale', axis, sign: 1 });
+    if (axis === 'y') continue;
+    const sb = part(HCOL[axis], rx, rz);                    // кубик с обратной стороны: тянуть противоположную грань
+    put(sb, new THREE.CylinderGeometry(0.012, 0.012, 0.6, 6).translate(0, -0.3, 0));
+    put(sb, new THREE.BoxGeometry(0.1, 0.1, 0.1).translate(0, -0.62, 0), 13);
+    grip(sb, [0, -0.62, 0], { kind: 'scale', axis, sign: -1 });
+  }
+  const hub = part(0xf3ead4, 0, 0);                         // шарик в центре: обычное перетаскивание с магнитом
+  put(hub, new THREE.SphereGeometry(0.085, 18, 12), 14);
+  const rim = new THREE.Mesh(new THREE.SphereGeometry(0.105, 18, 12), new THREE.MeshBasicMaterial({ color: 0x1b1a18, side: THREE.BackSide, depthTest: false, transparent: true }));
+  rim.renderOrder = 13;
+  hub.add(rim);
+  grip(hub, [0, 0, 0], { kind: 'grab' });
+  const arc = part(HCOL.y, 0, 0);                           // дуга между красной и зелёной стрелкой: поворот
+  put(arc, new THREE.TorusGeometry(0.72, 0.02, 8, 28, Math.PI / 2).rotateX(Math.PI / 2));
+  for (const a of [16, 24, 32, 40, 48, 56, 64, 72]) { const r = THREE.MathUtils.degToRad(a); grip(arc, [0.72 * Math.cos(r), 0, 0.72 * Math.sin(r)], { kind: 'rot' }); }
 }
 // высота видимой области (в единицах world) на расстоянии объекта — для элементов постоянного экранного размера
 function viewHeightAt(obj) {
