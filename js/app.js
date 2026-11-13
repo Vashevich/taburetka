@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=80';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=81';
 
 const STORE = 'taburetka.project.v1';
 
@@ -1358,7 +1358,7 @@ function updateConstSize() {
   const cl = world.worldToLocal(c.getWorldPosition(new THREE.Vector3()));
   let ownL = 0;
   for (const g of [dimsG, tmpG, autoG, tagsG]) for (const o of g.children) {
-    const k = g === autoG ? 0.5 : 1;     // габаритные размеры вдвое мельче поставленных вручную
+    const k = 0.5;                       // размеры, теги и габаритные размеры — одного, уменьшенного вдвое размера
     // «Свой» размер: насколько его линия утоплена в собственный предмет, если смотреть от зрителя, — на столько и выносим вперёд.
     if (o.userData.bar && o.userData.lift) {
       const own = inXR ? null : item(o.userData.lift);
