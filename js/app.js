@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=76';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=77';
 
 const STORE = 'taburetka.project.v1';
 
@@ -1284,6 +1284,23 @@ function liftPt(p, L, cl, c, out) {      // точка, сдвинутая к з
   const d = p.distanceTo(cl);
   return out.copy(p).sub(cl).multiplyScalar(Math.max(0.2, d - L) / (d || 1)).add(cl);
 }
+// Глубина точки внутри коробки предмета вдоль луча взгляда: расстояние от места, где луч входит в коробку, до точки.
+function depthIn(it, p, cl, c) {
+  const cs = Math.cos(it.rot || 0), sn = Math.sin(it.rot || 0), M = 0.015;
+  const loc = (q) => { const x = q.x - it.x, z = q.z - it.z; return [cs * x - sn * z, q.y - (it.y || 0), sn * x + cs * z]; };
+  const P = loc(p), O = c.isOrthographicCamera ? loc(_lb.copy(p).addScaledVector(_y.set(0, 0, 1).applyQuaternion(c.quaternion).transformDirection(_winv), 60)) : loc(cl);
+  const lo = [-it.w / 2 - M, -M, -it.d / 2 - M], hi = [it.w / 2 + M, it.h + M, it.d / 2 + M];
+  let t0 = 0, t1 = 1;
+  for (let i = 0; i < 3; i++) {
+    const d = P[i] - O[i];
+    if (Math.abs(d) < 1e-9) { if (O[i] < lo[i] || O[i] > hi[i]) return 0; continue; }
+    let a = (lo[i] - O[i]) / d, b = (hi[i] - O[i]) / d;
+    if (a > b) [a, b] = [b, a];
+    t0 = Math.max(t0, a); t1 = Math.min(t1, b);
+    if (t0 > t1) return 0;
+  }
+  return t0 <= 0 ? 0 : (1 - t0) * Math.hypot(P[0] - O[0], P[1] - O[1], P[2] - O[2]);
+}
 function updateConstSize() {
   for (const h of handles) if (h.userData.cs) h.scale.setScalar(h.userData.cs * viewHeightAt(h));
   for (const a of arrows) a.scale.setScalar((coarse ? 0.16 : 0.12) * (a.userData.gb ? 0.5 : 1) * viewHeightAt(a));   // гамбол вдвое меньше стрелок комнаты
@@ -1295,9 +1312,19 @@ function updateConstSize() {
   world.updateMatrixWorld(true);
   _winv.copy(world.matrixWorld).invert();
   const cl = world.worldToLocal(c.getWorldPosition(new THREE.Vector3()));
+  let ownL = 0;
   for (const g of [dimsG, tmpG, autoG, tagsG]) for (const o of g.children) {
     const k = g === autoG ? 0.5 : 1;     // габаритные размеры вдвое мельче поставленных вручную
-    const L = inXR ? 0 : o.userData.lift || 0;
+    // «Свой» размер: насколько его линия утоплена в собственный предмет, если смотреть от зрителя, — на столько и выносим вперёд.
+    if (o.userData.bar && o.userData.lift) {
+      const own = inXR ? null : item(o.userData.lift);
+      ownL = 0;
+      if (own) {
+        for (let i = 0; i <= 6; i++) ownL = Math.max(ownL, depthIn(own, _la.copy(o.userData.a0).lerp(o.userData.b0, i / 6), cl, c));
+        if (ownL > 0) ownL += 0.03;
+      }
+    }
+    const L = o.userData.lift ? ownL : 0;
     if (L && o.userData.bar) {           // «свой» размер рисуется ближе к зрителю вдоль луча взгляда: на экране он там же, но поверх своего предмета
       const a = liftPt(o.userData.a0, L, cl, c, _la), b = liftPt(o.userData.b0, L, cl, c, _lb), len = a.distanceTo(b);
       o.position.copy(a).add(b).multiplyScalar(0.5);
@@ -1475,7 +1502,7 @@ function rebuildDims() {
   for (const m of state.dims) {
     // Размер, оба конца которого стоят на одном предмете, этим предметом не заслоняется (остальными — да).
     const own = m.ai && m.bi && m.ai.id === m.bi.id ? item(m.ai.id) : null;
-    dimObjects(dimsG, dimEnd(m, 'a'), dimEnd(m, 'b'), false, own ? Math.hypot(own.w, own.d, own.h) + 0.05 : 0);
+    dimObjects(dimsG, dimEnd(m, 'a'), dimEnd(m, 'b'), false, own ? own.id : 0);
   }
   rebuildTags();
 }
