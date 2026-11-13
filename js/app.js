@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=70';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=71';
 
 const STORE = 'taburetka.project.v1';
 
@@ -1312,7 +1312,7 @@ function pickHandle() {
 
 // ───────────────────────── рулетка ─────────────────────────
 const DIM = new THREE.MeshBasicMaterial({ color: 0xa61e1e });   // размер стоит в пространстве: мебель его заслоняет
-const DIM_ = DIM, DIMA = new THREE.MeshBasicMaterial({ color: 0x1b1a18, depthTest: false, transparent: true });
+const DIM_ = DIM, DIMA = new THREE.MeshBasicMaterial({ color: 0x1b1a18 });   // габаритные размеры тоже стоят в пространстве и заслоняются предметами
 const BAR_GEO = new THREE.CylinderGeometry(1, 1, 1, 8), DOT_GEO = new THREE.SphereGeometry(1, 14, 10);
 let measureA = null;
 const LABEL_GEO = new THREE.PlaneGeometry(1, 1);
@@ -1331,7 +1331,7 @@ function makeLabel(text, auto) {
   x.fillText(text, c.width / 2, 34);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const sp = new THREE.Mesh(LABEL_GEO, new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide, depthTest: !auto }));
+  const sp = new THREE.Mesh(LABEL_GEO, new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide }));
   sp.userData = { label: true, aspect: c.width / c.height };
   sp.renderOrder = 20;
   sp.raycast = () => {};
