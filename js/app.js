@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=75';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=76';
 
 const STORE = 'taburetka.project.v1';
 
@@ -1278,6 +1278,12 @@ function viewHeightAt(obj) {
 }
 const _m1 = new THREE.Vector3(), _x = new THREE.Vector3(), _y = new THREE.Vector3(), _n = new THREE.Vector3(), _up = new THREE.Vector3(), _m4 = new THREE.Matrix4();
 const _pa = new THREE.Vector2(), _pb = new THREE.Vector2(), _pc = new THREE.Vector2(), _q = new THREE.Quaternion(), _zAxis = new THREE.Vector3(0, 0, 1), _winv = new THREE.Matrix4();
+const _la = new THREE.Vector3(), _lb = new THREE.Vector3();
+function liftPt(p, L, cl, c, out) {      // точка, сдвинутая к зрителю на L метров вдоль своего луча взгляда
+  if (c.isOrthographicCamera) return out.copy(p).addScaledVector(_y.set(0, 0, 1).applyQuaternion(c.quaternion).transformDirection(_winv), L);
+  const d = p.distanceTo(cl);
+  return out.copy(p).sub(cl).multiplyScalar(Math.max(0.2, d - L) / (d || 1)).add(cl);
+}
 function updateConstSize() {
   for (const h of handles) if (h.userData.cs) h.scale.setScalar(h.userData.cs * viewHeightAt(h));
   for (const a of arrows) a.scale.setScalar((coarse ? 0.16 : 0.12) * (a.userData.gb ? 0.5 : 1) * viewHeightAt(a));   // гамбол вдвое меньше стрелок комнаты
@@ -1291,13 +1297,21 @@ function updateConstSize() {
   const cl = world.worldToLocal(c.getWorldPosition(new THREE.Vector3()));
   for (const g of [dimsG, tmpG, autoG, tagsG]) for (const o of g.children) {
     const k = g === autoG ? 0.5 : 1;     // габаритные размеры вдвое мельче поставленных вручную
+    const L = inXR ? 0 : o.userData.lift || 0;
+    if (L && o.userData.bar) {           // «свой» размер рисуется ближе к зрителю вдоль луча взгляда: на экране он там же, но поверх своего предмета
+      const a = liftPt(o.userData.a0, L, cl, c, _la), b = liftPt(o.userData.b0, L, cl, c, _lb), len = a.distanceTo(b);
+      o.position.copy(a).add(b).multiplyScalar(0.5);
+      if (len > 1e-6) o.quaternion.setFromUnitVectors(THREE.Object3D.DEFAULT_UP, _x.copy(b).sub(a).multiplyScalar(1 / len));
+      o.userData.len = len;
+    }
+    if (L && o.userData.dot) liftPt(o.userData.p0, L, cl, c, o.position);
     if (o.userData.bar) { const t = (inXR ? 0.004 : 0.0022 * viewHeightAt(o)) * k; o.scale.set(t, o.userData.len, t); continue; }
     if (o.userData.dot) { o.scale.setScalar((inXR ? 0.011 : 0.0058 * viewHeightAt(o)) * k); continue; }
     if (!o.userData.label) continue;
     const s = (inXR ? 0.055 : 0.034 * viewHeightAt(o)) * k;
     o.scale.set(s * o.userData.aspect, s, 1);
     if (inXR) { o.rotation.set(0, Math.atan2(cl.x - o.position.x, cl.z - o.position.z), 0); continue; }
-    const A = o.userData.a, B = o.userData.b;
+    const A = L ? liftPt(o.userData.a, L, cl, c, _la) : o.userData.a, B = L ? liftPt(o.userData.b, L, cl, c, _lb) : o.userData.b;
     if (o.userData.tagP) {               // подпись тега: лицом к зрителю, чуть выше своей точки
       o.quaternion.copy(c.quaternion);
       o.position.copy(o.userData.tagP).addScaledVector(_up.set(0, 1, 0).applyQuaternion(c.quaternion).transformDirection(_winv), s * 0.95);
@@ -1377,19 +1391,19 @@ function makeLabel(text, auto, tag) {
   sp.raycast = () => {};
   return sp;
 }
-function dimObjects(group, a, b, auto) { // жирная линия размера с точками на концах и табличкой; auto — габаритный, тёмный, поверх всего
+function dimObjects(group, a, b, auto, lift = 0) { // жирная линия размера с точками на концах и табличкой; auto — габаритный, тёмный, поверх всего
   const dir = b.clone().sub(a), len = dir.length(), DIM = auto ? DIMA : DIM_;
   const bar = new THREE.Mesh(BAR_GEO, DIM);
   bar.position.copy(a).add(b).multiplyScalar(0.5);
   if (len > 1e-6) bar.quaternion.setFromUnitVectors(THREE.Object3D.DEFAULT_UP, dir.clone().multiplyScalar(1 / len));
-  bar.userData = { bar: true, len };
+  bar.userData = { bar: true, len, lift, a0: a.clone(), b0: b.clone() };
   bar.renderOrder = 19;
   bar.raycast = () => {};
   group.add(bar);
   for (const p of [a, b]) {
     const dot = new THREE.Mesh(DOT_GEO, DIM);
     dot.position.copy(p);
-    dot.userData = { dot: true };
+    dot.userData = { dot: true, lift, p0: p.clone() };
     dot.renderOrder = 19;
     dot.raycast = () => {};
     group.add(dot);
@@ -1397,7 +1411,7 @@ function dimObjects(group, a, b, auto) { // жирная линия размер
   const lab = makeLabel(`${Math.round(len * 100)} см`, auto);   // табличка лежит вдоль линии, прямо на ней
   if (auto) for (const o of group.children.slice(-3)) o.renderOrder = 17;
   lab.position.copy(a).add(b).multiplyScalar(0.5);
-  lab.userData.a = a.clone(); lab.userData.b = b.clone();
+  lab.userData.a = a.clone(); lab.userData.b = b.clone(); lab.userData.lift = lift;
   group.add(lab);
 }
 // Габаритные размеры всех предметов: ширина и глубина по верхним рёбрам с ближней к зрителю стороны,
@@ -1458,7 +1472,11 @@ function dimEnd(m, k) {
 }
 function rebuildDims() {
   clearGroup(dimsG);
-  for (const m of state.dims) dimObjects(dimsG, dimEnd(m, 'a'), dimEnd(m, 'b'));
+  for (const m of state.dims) {
+    // Размер, оба конца которого стоят на одном предмете, этим предметом не заслоняется (остальными — да).
+    const own = m.ai && m.bi && m.ai.id === m.bi.id ? item(m.ai.id) : null;
+    dimObjects(dimsG, dimEnd(m, 'a'), dimEnd(m, 'b'), false, own ? Math.hypot(own.w, own.d, own.h) + 0.05 : 0);
+  }
   rebuildTags();
 }
 // Теги: точка с подписью. Привязаны к углу предмета так же, как концы размеров, и видны сквозь мебель и стены.
