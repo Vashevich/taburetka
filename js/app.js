@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=65';
+import { CATALOG, CATS, fillBlank, applyAct, EDGE, NOSUP_T, RUGS, EMBED_T, seatOf, partsOf, CAT_COLOR } from './furniture.js?v=66';
 
 const STORE = 'taburetka.project.v1';
 
@@ -274,20 +274,37 @@ function faceAtRay() {                   // грань оболочки под �
   hits.sort((p, q) => p.distance - q.distance);
   return hits[0].object.userData.tri[hits[0].faceIndex] ?? -1;
 }
+// Грань комнаты, выбранная в «Выборе» (нажатие по стене, полу или потолку мимо мебели): можно сменить цвет.
+let faceSel = -1;
+const faceLine = new THREE.LineLoop(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x1f6feb, depthTest: false, transparent: true }));
+faceLine.renderOrder = 10; faceLine.visible = false; faceLine.raycast = () => {};
+world.add(faceLine);
+function pickFace(fi) {
+  faceSel = fi;
+  faceLine.visible = fi >= 0;
+  if (fi >= 0) faceLine.geometry.setFromPoints(roomMesh().f[fi].map(mv));
+  updateFacePanel();
+}
+const curFace = () => (tool === 'room' && roomSel && roomSel.kind === 'f' ? +roomSel.key.slice(1) : tool === 'select' ? faceSel : -1);
 function setFaceColor(c) {              // свой цвет у выделенной стены, пола или потолка; null — как у комнаты
-  if (!roomSel || roomSel.kind !== 'f') return;
-  const m = roomMesh(), fi = +roomSel.key.slice(1);
+  const fi = curFace();
+  if (fi < 0) return;
+  const m = roomMesh();
   if (!m.c) m.c = m.f.map(() => null);
   while (m.c.length < m.f.length) m.c.push(null);
   m.c[fi] = c;
-  buildRoom(); commit(); updateFacePanel();
+  buildRoom(); commit();
+  if (tool === 'select') pickFace(fi); else updateFacePanel();
 }
 function updateFacePanel() {
-  const on = tool === 'room' && !!roomSel && roomSel.kind === 'f' && !renderer.xr.isPresenting, el = $('#facePanel');
+  const fi = curFace(), m = roomMesh(), on = fi >= 0 && fi < m.f.length && !renderer.xr.isPresenting, el = $('#facePanel');
   el.hidden = !on;
-  if (!on) return;
-  const m = roomMesh(), fi = +roomSel.key.slice(1), ny = faceNormal(m.f[fi]).y;
-  $('#fTitle').textContent = ny > 0.7 ? 'Пол' : ny < -0.7 ? 'Потолок' : 'Стена';
+  if (!on) { if (faceSel >= 0 && tool !== 'select') { faceSel = -1; faceLine.visible = false; } return; }
+  const n = faceNormal(m.f[fi]), P = m.f[fi].map(mv);
+  // размеры грани: вдоль горизонтали и вдоль подъёма
+  const u = new THREE.Vector3(Math.abs(n.y) < 0.9 ? 0 : 1, Math.abs(n.y) < 0.9 ? 1 : 0, 0).cross(n).normalize(), w = n.clone().cross(u);
+  const ex = (ax) => Math.max(...P.map((q) => q.dot(ax))) - Math.min(...P.map((q) => q.dot(ax)));
+  $('#fTitle').textContent = `${n.y > 0.7 ? 'Пол' : n.y < -0.7 ? 'Потолок' : 'Стена'} · ${fmt(ex(u))} × ${fmt(ex(w))}`;
   markSwatch($('#fSwatches'), (m.c && m.c[fi]) || '');
 }
 function recenterRoom() {               // габариты комнаты — по сетке; центр возвращаем в ноль, сдвигая всё разом
@@ -420,6 +437,7 @@ function rebuildShellView() {
   wallView.geometry = shellGeo(d.spos, d.scol);
 }
 function buildRoom() {
+  if (faceSel >= 0) { faceSel = -1; faceLine.visible = false; }   // комната перестроена — прежняя грань могла измениться
   disposeChildren(roomG);
   const { w, d, floor, wall } = state.room, m = roomMesh();
   // оболочка: пол отдельно (свой цвет), стены и потолок вместе; грани — плоские многоугольники
@@ -1844,6 +1862,7 @@ function onTap(e, dn) {
   }
   if (pk && pk.id === selId && tool === 'select' && dn && dn.wasSel === pk.id) { toggleSub(pk); return; }   // второй клик по уже выбранному предмету — его внутренняя часть
   select(pk ? pk.id : null);
+  if (tool === 'select') { const fi = pk ? -1 : faceAtRay(); pickFace(fi === faceSel ? -1 : fi); }   // мимо мебели — стена, пол или потолок
 }
 // «Действие»: открыть / закрыть дверцу или ящик, по которому попали
 const anims = [];
@@ -1913,6 +1932,7 @@ const makeCursors = () => {
 };
 function setTool(t) {
   tool = t;
+  if (t !== 'select' && faceSel >= 0) pickFace(-1);
   CURSORS = CURSORS || makeCursors();
   canvas.style.cursor = CURSORS[t] || 'auto';
   measureA = null;
@@ -1998,7 +2018,7 @@ swatches($('#rFloorSw'), (c) => { state.room.floor = c; buildRoom(); commit(); }
 swatches($('#rWallSw'), (c) => { state.room.wall = c; buildRoom(); commit(); });
 swatches($('#fSwatches'), (c) => setFaceColor(c));
 $('#fReset').onclick = () => setFaceColor(null);
-$('#fClose').onclick = () => { roomSel = null; updateGizmo(); };
+$('#fClose').onclick = () => { if (tool === 'select') pickFace(-1); else { roomSel = null; updateGizmo(); } };
 P.name.addEventListener('change', () => editSel((it) => { it.name = P.name.value.trim() || it.name; }, false));
 P.keep.addEventListener('change', () => editSel((it) => { it.keep = P.keep.checked; }, false));
 P.lock.addEventListener('change', () => editSel((it) => { it.lock = P.lock.checked; }, false));
