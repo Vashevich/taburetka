@@ -16,6 +16,7 @@ const fmt = (m) => `${Math.round(m * 1000) / 10} см`.replace('.', ',');
 
 // ───────────────────────── сцена ─────────────────────────
 const canvas = $('#view');
+throw new Error('ТЕСТ: намеренная поломка');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
 renderer.shadowMap.enabled = true;
